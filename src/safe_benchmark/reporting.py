@@ -84,12 +84,12 @@ def generate_report(all_results: list[dict[str, Any]], output_path: Path) -> Non
     ]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
 
 def save_results_json(all_results: list[dict[str, Any]], output_path: Path) -> None:
     """Save raw results as JSON."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, default=str)

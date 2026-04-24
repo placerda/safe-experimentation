@@ -122,17 +122,29 @@ def main() -> None:
             current += 1
             print(f"[{current}/{total}] Running {variant_name} on {task.task.task_id}...")
 
-            trace = run_task(
-                task=task,
-                agent_system_prompt=system_prompt,
-                agent_variant=variant_name,
-                config=run_config,
-                domain_policy=policies.get(task.task.domain, ""),
-            )
+            try:
+                trace = run_task(
+                    task=task,
+                    agent_system_prompt=system_prompt,
+                    agent_variant=variant_name,
+                    config=run_config,
+                    domain_policy=policies.get(task.task.domain, ""),
+                )
+            except Exception as e:
+                print(f"  ERROR (unrecoverable): {e}")
+                # Create a minimal error trace
+                from safe_benchmark.trace_schema import AgentTrace
+                trace = AgentTrace(
+                    task_id=task.task.task_id,
+                    domain=task.task.domain,
+                    agent_variant=variant_name,
+                    system_prompt=system_prompt,
+                    error=f"Unrecoverable error: {e}",
+                )
 
             # Save trace
             trace_path = traces_dir / f"{variant_name}_{task.task.task_id}.json"
-            with open(trace_path, "w") as f:
+            with open(trace_path, "w", encoding="utf-8") as f:
                 f.write(trace.model_dump_json(indent=2))
 
             # Evaluate

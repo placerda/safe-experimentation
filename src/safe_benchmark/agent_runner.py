@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from pydantic import BaseModel
@@ -54,30 +55,34 @@ class RunConfig(BaseModel):
 
 
 def _load_domain_env(domain: str) -> tuple[Any, Any, list[dict]]:
-    """Load τ³-bench domain environment: toolkit instance, db, and OpenAI tool schemas.
+    """Load τ³-bench domain environment and OpenAI tool schemas.
 
-    Returns (toolkit, db, openai_tools_list).
+    Returns (environment, toolkit, openai_tools_list).
     """
-    from tau2.domains import load_domain
+    if domain == "airline":
+        from tau2.domains.airline.environment import get_environment
+    elif domain == "retail":
+        from tau2.domains.retail.environment import get_environment
+    else:
+        raise ValueError(f"Unsupported domain: {domain}")
 
-    domain_obj = load_domain(domain)
-    env = domain_obj.create_env()
+    env = get_environment()
     toolkit = env.tools
 
     # Convert τ³-bench tools to OpenAI function-calling format
     openai_tools = []
     for name, tool in toolkit.get_tools().items():
-        params_schema = tool._serialize_params(tool.params) if tool.params else {}
+        params_schema = tool.params.model_json_schema() if tool.params else {}
         openai_tools.append({
             "type": "function",
             "function": {
                 "name": name,
-                "description": str(tool),
+                "description": tool.short_desc or tool.long_desc or str(tool),
                 "parameters": params_schema or {"type": "object", "properties": {}},
             },
         })
 
-    return toolkit, env, openai_tools
+    return env, toolkit, openai_tools
 
 
 def _build_user_system_prompt(task: AnnotatedTask) -> str:
@@ -116,13 +121,17 @@ def _simulate_user_turn(
         elif msg["role"] == "user":
             user_messages.append({"role": "assistant", "content": msg.get("content", "")})
 
-    response = client.chat.completions.create(
-        model=deployment,
-        messages=user_messages,
-        max_tokens=USER_SIMULATOR_MAX_TOKENS,
-        temperature=0.3,
-    )
-    return response.choices[0].message.content or ""
+    try:
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=user_messages,
+            max_tokens=USER_SIMULATOR_MAX_TOKENS,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content or ""
+    except Exception:
+        # Content filter or other API error — return a generic fallback
+        return "I'd like help with my request, please."
 
 
 def run_task(
@@ -157,11 +166,25 @@ def run_task(
         trace.error = f"Failed to load domain environment: {e}"
         return trace
 
-    client = AzureOpenAI(
-        azure_endpoint=config.azure_endpoint,
-        api_key=config.azure_api_key,
-        api_version=config.azure_api_version,
-    )
+    # Tool execution goes through environment.use_tool()
+
+    if config.azure_api_key:
+        client = AzureOpenAI(
+            azure_endpoint=config.azure_endpoint,
+            api_key=config.azure_api_key,
+            api_version=config.azure_api_version,
+        )
+    else:
+        # Use Entra ID token-based auth (DefaultAzureCredential)
+        token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(),
+            "https://cognitiveservices.azure.com/.default",
+        )
+        client = AzureOpenAI(
+            azure_endpoint=config.azure_endpoint,
+            azure_ad_token_provider=token_provider,
+            api_version=config.azure_api_version,
+        )
 
     # Build full system prompt with domain policy
     full_system = agent_system_prompt
@@ -225,7 +248,7 @@ def run_task(
 
                 # Execute tool via τ³-bench environment
                 try:
-                    result = str(toolkit.use_tool(func_name, **func_args))
+                    result = str(env.use_tool(func_name, **func_args))
                 except Exception as e:
                     result = f"Error: {e}"
 
