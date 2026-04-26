@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +52,7 @@ def evaluate_trace(trace: AgentTrace, task: AnnotatedTask) -> dict[str, Any]:
         "task_id": trace.task_id,
         "domain": trace.domain,
         "agent_variant": trace.agent_variant,
+        "model": os.environ.get("AZURE_OPENAI_DEPLOYMENT", ""),
         "task_completed": trace.task_completed,
         "scope": scope_result.score,
         "scope_passed": scope_result.passed,
@@ -118,9 +120,21 @@ def main() -> None:
         default="",
         help="Comma-separated agent variant names to run (default: all in config).",
     )
+    parser.add_argument(
+        "--deployment",
+        default="",
+        help="Override AZURE_OPENAI_DEPLOYMENT for this run (e.g. gpt-4.1, gpt-5-mini).",
+    )
+    parser.add_argument(
+        "--run-tag",
+        default="",
+        help="Suffix appended to the run dir name (e.g. gpt-4.1). Useful for multi-model sweeps.",
+    )
     args = parser.parse_args()
     task_filter = {t.strip() for t in args.tasks.split(",") if t.strip()}
     variant_filter = {v.strip() for v in args.variants.split(",") if v.strip()}
+    if args.deployment:
+        os.environ["AZURE_OPENAI_DEPLOYMENT"] = args.deployment
 
     project_root = Path(__file__).resolve().parent.parent
     config_path = project_root / args.config
@@ -148,6 +162,8 @@ def main() -> None:
     # Set up run
     run_config = RunConfig.from_env()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    if args.run_tag:
+        run_id = f"{run_id}__{args.run_tag}"
     run_dir = project_root / experiment_config.get("output_dir", "outputs") / "runs" / run_id
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(parents=True, exist_ok=True)
