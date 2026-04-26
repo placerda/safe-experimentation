@@ -32,6 +32,18 @@ USER_SIMULATOR_MAX_TOKENS = 300
 AGENT_MAX_TOKENS = 1024
 
 
+def _model_kwargs(deployment: str, max_tokens: int, temperature: float) -> dict[str, Any]:
+    """Return the right kwargs for chat.completions.create for this deployment.
+
+    gpt-5* models require ``max_completion_tokens`` and only accept the default
+    temperature. gpt-4* models still take ``max_tokens`` + arbitrary temperature.
+    """
+    name = deployment.lower()
+    if name.startswith("gpt-5") or name.startswith("o1") or name.startswith("o3"):
+        return {"max_completion_tokens": max_tokens}
+    return {"max_tokens": max_tokens, "temperature": temperature}
+
+
 class RunConfig(BaseModel):
     """Configuration for an experiment run."""
 
@@ -125,8 +137,7 @@ def _simulate_user_turn(
         response = client.chat.completions.create(
             model=deployment,
             messages=user_messages,
-            max_tokens=USER_SIMULATOR_MAX_TOKENS,
-            temperature=0.3,
+            **_model_kwargs(deployment, USER_SIMULATOR_MAX_TOKENS, 0.3),
         )
         return response.choices[0].message.content or ""
     except Exception:
@@ -211,8 +222,7 @@ def run_task(
                 model=config.azure_deployment,
                 messages=agent_messages,
                 tools=openai_tools if openai_tools else None,
-                max_tokens=AGENT_MAX_TOKENS,
-                temperature=0.0,
+                **_model_kwargs(config.azure_deployment, AGENT_MAX_TOKENS, 0.0),
             )
         except Exception as e:
             trace.error = f"Agent API call failed at turn {turn}: {e}"
