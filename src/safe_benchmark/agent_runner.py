@@ -246,9 +246,19 @@ def run_task(
                 except json.JSONDecodeError:
                     func_args = {}
 
-                # Execute tool via τ³-bench environment
+                # Execute tool via τ³-bench environment, recording the
+                # canonical JSON result so τ³-bench's evaluator can replay
+                # the trajectory deterministically.
+                from tau2.data_model.message import ToolCall as _Tau2ToolCall
+                tau2_call = _Tau2ToolCall(
+                    id=tc.id,
+                    name=func_name,
+                    arguments=func_args,
+                    requestor="assistant",
+                )
                 try:
-                    result = str(env.use_tool(func_name, **func_args))
+                    tool_msg = env.get_response(tau2_call)
+                    result = tool_msg.content if tool_msg.content is not None else ""
                 except Exception as e:
                     result = f"Error: {e}"
 
