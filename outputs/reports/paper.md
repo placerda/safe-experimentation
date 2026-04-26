@@ -312,7 +312,7 @@ All numbers in this paper come from `outputs/runs/20260425_112848/`.
 
 ## References
 
-[1] *SAFE: Designing Responsible Agentic Systems.* TowardsAI, 2024.
+[1] *SAFE: Designing Responsible Agentic Systems.* TowardsAI, Mar 6, 2026.
     <https://pub.towardsai.net/safe-designing-responsible-agentic-systems-3dcc27075d4b>
 
 [2] Sierra Research. *τ³-bench / tau2-bench.*
