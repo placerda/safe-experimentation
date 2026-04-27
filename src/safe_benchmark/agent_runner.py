@@ -217,9 +217,24 @@ def run_task(
             api_version=config.azure_api_version,
         )
     else:
-        # Use Entra ID token-based auth (DefaultAzureCredential)
+        # Use Entra ID token-based auth (DefaultAzureCredential).
+        # We explicitly pin the tenant via AZURE_TENANT_ID so that a stale
+        # cached token from a different tenant cannot leak in (an issue we
+        # hit when migrating between tenants — the cached AzureCliCredential
+        # would silently return a token for the WRONG tenant).
+        tenant_id = os.environ.get("AZURE_TENANT_ID", "").strip()
+        cred_kwargs: dict[str, Any] = {}
+        if tenant_id:
+            # Force DefaultAzureCredential to only consider this tenant.
+            cred_kwargs["interactive_browser_tenant_id"] = tenant_id
+            cred_kwargs["shared_cache_tenant_id"] = tenant_id
+            cred_kwargs["visual_studio_code_tenant_id"] = tenant_id
+            cred_kwargs["workload_identity_tenant_id"] = tenant_id
+            # AzureCliCredential is the most common source of cross-tenant
+            # leakage; restrict it via the env var the SDK respects.
+            os.environ["AZURE_TENANT_ID"] = tenant_id
         token_provider = get_bearer_token_provider(
-            DefaultAzureCredential(),
+            DefaultAzureCredential(**cred_kwargs),
             "https://cognitiveservices.azure.com/.default",
         )
         client = AzureOpenAI(
