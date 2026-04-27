@@ -28,11 +28,12 @@ class AgentTrace(BaseModel):
 
     task_id: str
     domain: str
-    agent_variant: str  # "baseline" or "safe-aware"
+    agent_variant: str  # "baseline" | "safe-aware" | "prompt-only" | "binding-only"
     system_prompt: str
     messages: list[Message] = Field(default_factory=list)
     tool_calls_log: list[ToolCall] = Field(default_factory=list, description="Flat list of all tool calls made")
     final_response: str = ""
     task_completed: bool = False
     error: str | None = None
+    seed: int = 0
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -75,6 +75,31 @@ def _load_domain_env(domain: str) -> tuple[Any, Any, list[dict]]:
         from tau2.domains.airline.environment import get_environment
     elif domain == "retail":
         from tau2.domains.retail.environment import get_environment
+    elif domain == "telecom":
+        # Telecom policy files contain non-cp1252 chars; tau2.io_utils.load_file
+        # opens text files passing encoding=None, which fails on Windows.
+        # Wrap load_file to substitute UTF-8 for None encoding on .md/.txt.
+        from tau2.utils import io_utils as _io_utils
+
+        if not getattr(_io_utils, "_safe_utf8_patched", False):
+            _orig_load = _io_utils.load_file
+
+            def _utf8_load(path, **kwargs):
+                from pathlib import Path as _P
+                p = _P(path)
+                if p.suffix in (".md", ".txt") and kwargs.get("encoding") is None:
+                    kwargs["encoding"] = "utf-8"
+                return _orig_load(path, **kwargs)
+
+            _io_utils.load_file = _utf8_load
+            _io_utils._safe_utf8_patched = True
+            # Also patch the symbol already imported into telecom.environment.
+            try:
+                from tau2.domains.telecom import environment as _tenv
+                _tenv.load_file = _utf8_load
+            except Exception:
+                pass
+        from tau2.domains.telecom.environment import get_environment
     else:
         raise ValueError(f"Unsupported domain: {domain}")
 
@@ -123,6 +148,7 @@ def _simulate_user_turn(
     deployment: str,
     user_system_prompt: str,
     conversation_so_far: list[dict],
+    temperature: float = 0.3,
 ) -> str:
     """Use LLM to simulate the user's next message."""
     # Build user-perspective messages: swap roles (agent messages become "user" for the user LLM)
@@ -137,7 +163,7 @@ def _simulate_user_turn(
         response = client.chat.completions.create(
             model=deployment,
             messages=user_messages,
-            **_model_kwargs(deployment, USER_SIMULATOR_MAX_TOKENS, 0.3),
+            **_model_kwargs(deployment, USER_SIMULATOR_MAX_TOKENS, temperature),
         )
         return response.choices[0].message.content or ""
     except Exception:
@@ -151,15 +177,19 @@ def run_task(
     agent_variant: str,
     config: RunConfig,
     domain_policy: str = "",
+    seed: int = 0,
 ) -> AgentTrace:
     """Run a single task with the given agent prompt, returning a full trace.
 
     Args:
         task: The annotated task to run
         agent_system_prompt: System prompt for the agent (baseline or SAFE-aware)
-        agent_variant: "baseline" or "safe-aware"
+        agent_variant: variant name (used for trace metadata)
         config: Azure OpenAI configuration
         domain_policy: The domain policy text to include in agent system prompt
+        seed: integer seed used to introduce per-run variability for the user
+            simulator (small temperature jitter). Each (task, variant, seed) is
+            an independent draw from the joint agent+user distribution.
 
     Returns:
         AgentTrace with complete conversation and tool call log
@@ -170,6 +200,7 @@ def run_task(
         agent_variant=agent_variant,
         system_prompt=agent_system_prompt,
     )
+    trace.seed = seed
 
     try:
         toolkit, env, openai_tools = _load_domain_env(task.task.domain)
@@ -209,8 +240,11 @@ def run_task(
     user_system_prompt = _build_user_system_prompt(task)
     user_conversation: list[dict] = []  # From user's perspective (plain user/assistant)
 
-    # Initial user message
-    initial_user_msg = _simulate_user_turn(client, config.user_deployment, user_system_prompt, [])
+    # Initial user message — small temperature jitter per seed for reproducible diversity
+    user_temp = 0.2 + 0.1 * (seed % 3)
+    initial_user_msg = _simulate_user_turn(
+        client, config.user_deployment, user_system_prompt, [], temperature=user_temp
+    )
     agent_messages.append({"role": "user", "content": initial_user_msg})
     user_conversation.append({"role": "user", "content": initial_user_msg})
     trace.messages.append(Message(role="user", content=initial_user_msg))
@@ -312,7 +346,8 @@ def run_task(
 
         # User simulator turn
         user_response = _simulate_user_turn(
-            client, config.user_deployment, user_system_prompt, user_conversation
+            client, config.user_deployment, user_system_prompt, user_conversation,
+            temperature=user_temp,
         )
         agent_messages.append({"role": "user", "content": user_response})
         user_conversation.append({"role": "user", "content": user_response})
