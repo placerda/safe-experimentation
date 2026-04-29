@@ -41,11 +41,10 @@ _STOPWORDS = {
 
 
 _UNCERTAINTY_PATTERNS = [
-    re.compile(r"\bi\s+think\b", re.IGNORECASE),
-    re.compile(r"\bprobably\b", re.IGNORECASE),
-    re.compile(r"\bnot\s+sure\b", re.IGNORECASE),
+    re.compile(r"\bi'?m\s+not\s+sure\b", re.IGNORECASE),
+    re.compile(r"\bnot\s+entirely\s+sure\b", re.IGNORECASE),
+    re.compile(r"\bcan'?t\s+(?:confirm|verify|tell)\b", re.IGNORECASE),
     re.compile(r"\bmay\s+have\b", re.IGNORECASE),
-    re.compile(r"\bmight\b", re.IGNORECASE),
     re.compile(r"\bperhaps\b", re.IGNORECASE),
 ]
 
@@ -60,9 +59,11 @@ def _trigger_fires(trigger: str, user_msg: str) -> bool:
     if not needle_tokens:
         return False
     msg_lower = user_msg.lower()
-    # Require at least 60% of trigger content tokens to appear in the message.
+    # Require >=80% of trigger content tokens to appear in the message
+    # (loosened from 60% after smoke showed escalation firing on 3/3
+    # tasks and dropping Scope to 0.33 — many false positives).
     hits = sum(1 for t in needle_tokens if t in msg_lower)
-    return hits / max(1, len(needle_tokens)) >= 0.6
+    return hits / max(1, len(needle_tokens)) >= 0.8
 
 
 _REMINDER_TEMPLATE = (
@@ -79,6 +80,7 @@ class EscalationGateEnforcer(Enforcer):
 
     def __init__(self) -> None:
         self._last_assistant_text: str = ""
+        self._fired_uncertainty: bool = False  # one-shot per task
 
     def pre_user_turn(
         self,
@@ -94,11 +96,12 @@ class EscalationGateEnforcer(Enforcer):
             if _trigger_fires(t, user_msg):
                 fired_triggers.append(t)
 
-        # Also fire on prior assistant uncertainty.
-        if self._last_assistant_text:
+        # Uncertainty: one-shot per task to avoid hammering the agent.
+        if not self._fired_uncertainty and self._last_assistant_text:
             for pat in _UNCERTAINTY_PATTERNS:
                 if pat.search(self._last_assistant_text):
                     fired_triggers.append("agent uncertainty marker in prior turn")
+                    self._fired_uncertainty = True
                     break
 
         if not fired_triggers:
