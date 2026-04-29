@@ -3,7 +3,7 @@
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot\..
 . .\.venv\Scripts\Activate.ps1
-$env:AZURE_OPENAI_ENDPOINT = "https://aif-paulolacerda-0426261026.openai.azure.com/"
+$env:AZURE_OPENAI_ENDPOINT = "https://aif-amth4qdo24te2.cognitiveservices.azure.com/"
 $env:AZURE_OPENAI_API_VERSION = "2024-12-01-preview"
 $env:AZURE_OPENAI_DEPLOYMENT = "gpt-4.1"
 $env:AZURE_OPENAI_USER_DEPLOYMENT = "gpt-4.1"

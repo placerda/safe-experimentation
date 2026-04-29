@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from azure.identity import AzureCliCredential, DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from pydantic import BaseModel
@@ -217,24 +217,20 @@ def run_task(
             api_version=config.azure_api_version,
         )
     else:
-        # Use Entra ID token-based auth (DefaultAzureCredential).
-        # We explicitly pin the tenant via AZURE_TENANT_ID so that a stale
-        # cached token from a different tenant cannot leak in (an issue we
-        # hit when migrating between tenants — the cached AzureCliCredential
-        # would silently return a token for the WRONG tenant).
+        # Use Entra ID token-based auth.
+        # We pin the tenant via AZURE_TENANT_ID. Empirically, even with
+        # tenant kwargs on DefaultAzureCredential, AzureCliCredential
+        # without tenant_id can return a token for whichever tenant `az`
+        # last cached — across our v3 sweep this caused ~12 hours of
+        # tenant-mismatch 400s. Forcing AzureCliCredential(tenant_id=...)
+        # makes every refresh explicit. See git log around 2026-04-29.
         tenant_id = os.environ.get("AZURE_TENANT_ID", "").strip()
-        cred_kwargs: dict[str, Any] = {}
         if tenant_id:
-            # Force DefaultAzureCredential to only consider this tenant.
-            cred_kwargs["interactive_browser_tenant_id"] = tenant_id
-            cred_kwargs["shared_cache_tenant_id"] = tenant_id
-            cred_kwargs["visual_studio_code_tenant_id"] = tenant_id
-            cred_kwargs["workload_identity_tenant_id"] = tenant_id
-            # AzureCliCredential is the most common source of cross-tenant
-            # leakage; restrict it via the env var the SDK respects.
-            os.environ["AZURE_TENANT_ID"] = tenant_id
+            credential = AzureCliCredential(tenant_id=tenant_id)
+        else:
+            credential = DefaultAzureCredential()
         token_provider = get_bearer_token_provider(
-            DefaultAzureCredential(**cred_kwargs),
+            credential,
             "https://cognitiveservices.azure.com/.default",
         )
         client = AzureOpenAI(
