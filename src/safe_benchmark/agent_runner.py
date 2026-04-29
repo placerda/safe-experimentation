@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from azure.core.credentials import AccessToken, TokenCredential
 from azure.identity import AzureCliCredential, DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from openai import AzureOpenAI
@@ -30,6 +31,75 @@ load_dotenv()
 MAX_TURNS = 20
 USER_SIMULATOR_MAX_TOKENS = 300
 AGENT_MAX_TOKENS = 1024
+
+
+class _RetryingAzureCliCredential:
+    """AzureCliCredential wrapper with retry+backoff and on-disk token cache.
+
+    Rationale: the vanilla AzureCliCredential spawns `az` to refresh tokens.
+    Under load (or when the system's `az` binary is slow to start, ~3s
+    observed on this dev machine), the SDK's internal subprocess timeout
+    occasionally fires and bubbles up as "Failed to invoke the Azure CLI"
+    errors that abort the agent run. During the v3 retry pass this caused
+    ~25% of evals to fail in mid-stream.
+
+    This wrapper:
+      1. Caches the access_token on disk (.aztoken_cache.json) so cross-
+         process retries (each batch is a fresh subprocess) reuse a still-
+         valid token without re-spawning `az`.
+      2. Retries `az` invocation up to 3x with backoff on failures.
+    """
+
+    def __init__(self, tenant_id: str, scope: str = "https://cognitiveservices.azure.com/.default"):
+        import time as _t
+        self._inner = AzureCliCredential(tenant_id=tenant_id)
+        self._scope = scope
+        self._tenant_id = tenant_id
+        self._cache_path = Path(__file__).resolve().parent.parent.parent / ".aztoken_cache.json"
+        self._t = _t
+
+    def _read_cache(self):
+        try:
+            if not self._cache_path.exists():
+                return None
+            payload = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            if payload.get("scope") != self._scope or payload.get("tenant") != self._tenant_id:
+                return None
+            if int(payload["expires_on"]) - int(self._t.time()) < 300:
+                return None
+            return AccessToken(payload["token"], int(payload["expires_on"]))
+        except Exception:
+            return None
+
+    def _write_cache(self, token):
+        try:
+            self._cache_path.write_text(
+                json.dumps({
+                    "tenant": self._tenant_id,
+                    "scope": self._scope,
+                    "token": token.token,
+                    "expires_on": int(token.expires_on),
+                }),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def get_token(self, *scopes, **kwargs):
+        cached = self._read_cache()
+        if cached is not None:
+            return cached
+        last_err = None
+        for attempt in range(3):
+            try:
+                tok = self._inner.get_token(*scopes, **kwargs)
+                self._write_cache(tok)
+                return tok
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                self._t.sleep(2 * (attempt + 1))
+        raise last_err
+
 
 
 def _model_kwargs(deployment: str, max_tokens: int, temperature: float) -> dict[str, Any]:
@@ -226,7 +296,7 @@ def run_task(
         # makes every refresh explicit. See git log around 2026-04-29.
         tenant_id = os.environ.get("AZURE_TENANT_ID", "").strip()
         if tenant_id:
-            credential = AzureCliCredential(tenant_id=tenant_id)
+            credential = _RetryingAzureCliCredential(tenant_id=tenant_id)
         else:
             credential = DefaultAzureCredential()
         token_provider = get_bearer_token_provider(
