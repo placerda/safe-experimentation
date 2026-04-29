@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from openai import AzureOpenAI
 from pydantic import BaseModel
 
+from safe_benchmark.enforcers import Enforcer, GuardrailEvent
 from safe_benchmark.task_loader import AnnotatedTask
 from safe_benchmark.trace_schema import AgentTrace, Message, ToolCall
 
@@ -248,6 +249,7 @@ def run_task(
     config: RunConfig,
     domain_policy: str = "",
     seed: int = 0,
+    guardrail_stack: list[Enforcer] | None = None,
 ) -> AgentTrace:
     """Run a single task with the given agent prompt, returning a full trace.
 
@@ -260,10 +262,16 @@ def run_task(
         seed: integer seed used to introduce per-run variability for the user
             simulator (small temperature jitter). Each (task, variant, seed) is
             an independent draw from the joint agent+user distribution.
+        guardrail_stack: ordered list of runtime enforcers. Empty/None = no
+            enforcement (baseline). Hooks fire in stack order on every tool
+            call and user turn; the FIRST BLOCK decision short-circuits.
 
     Returns:
         AgentTrace with complete conversation and tool call log
     """
+    stack: list[Enforcer] = list(guardrail_stack or [])
+    guardrail_events: list[GuardrailEvent] = []
+
     trace = AgentTrace(
         task_id=task.task.task_id,
         domain=task.task.domain,
@@ -271,12 +279,24 @@ def run_task(
         system_prompt=agent_system_prompt,
     )
     trace.seed = seed
+    trace.metadata["guardrails"] = [e.name for e in stack]
 
     try:
         toolkit, env, openai_tools = _load_domain_env(task.task.domain)
     except Exception as e:
         trace.error = f"Failed to load domain environment: {e}"
         return trace
+
+    # Apply guardrail filter_tools hook (BindingEnforcer uses this).
+    for enforcer in stack:
+        try:
+            openai_tools, evs = enforcer.filter_tools(openai_tools, task)
+            guardrail_events.extend(evs)
+        except Exception as e:  # noqa: BLE001
+            guardrail_events.append(
+                GuardrailEvent(turn=0, enforcer=enforcer.name, hook="filter_tools",
+                               action="error", reason=str(e))
+            )
 
     # Tool execution goes through environment.use_tool()
 
@@ -330,6 +350,19 @@ def run_task(
     user_conversation.append({"role": "user", "content": initial_user_msg})
     trace.messages.append(Message(role="user", content=initial_user_msg))
 
+    # Fire pre_user_turn hooks on the initial user message.
+    for enforcer in stack:
+        try:
+            reminder, evs = enforcer.pre_user_turn(initial_user_msg, task, 0)
+            guardrail_events.extend(evs)
+            if reminder:
+                agent_messages.append({"role": "system", "content": reminder})
+        except Exception as e:  # noqa: BLE001
+            guardrail_events.append(
+                GuardrailEvent(turn=0, enforcer=enforcer.name, hook="pre_user_turn",
+                               action="error", reason=str(e))
+            )
+
     for turn in range(config.max_turns):
         try:
             # Agent turn
@@ -371,21 +404,63 @@ def run_task(
                 except json.JSONDecodeError:
                     func_args = {}
 
-                # Execute tool via τ³-bench environment, recording the
-                # canonical JSON result so τ³-bench's evaluator can replay
-                # the trajectory deterministically.
-                from tau2.data_model.message import ToolCall as _Tau2ToolCall
-                tau2_call = _Tau2ToolCall(
-                    id=tc.id,
-                    name=func_name,
-                    arguments=func_args,
-                    requestor="assistant",
-                )
-                try:
-                    tool_msg = env.get_response(tau2_call)
-                    result = tool_msg.content if tool_msg.content is not None else ""
-                except Exception as e:
-                    result = f"Error: {e}"
+                proposed_call = ToolCall(name=func_name, arguments=func_args)
+
+                # pre_tool_call hooks: first BLOCK wins; advisory reasons
+                # from ALLOW decisions are accumulated and appended to the
+                # tool result as a postscript.
+                blocked_reason: str | None = None
+                advisory_notes: list[str] = []
+                for enforcer in stack:
+                    try:
+                        decision, evs = enforcer.pre_tool_call(
+                            proposed_call, task, trace.tool_calls_log, turn
+                        )
+                        guardrail_events.extend(evs)
+                    except Exception as e:  # noqa: BLE001
+                        guardrail_events.append(
+                            GuardrailEvent(turn=turn, enforcer=enforcer.name,
+                                           hook="pre_tool_call", action="error",
+                                           tool_name=func_name, reason=str(e))
+                        )
+                        continue
+                    if decision.action == "block":
+                        blocked_reason = decision.reason or "blocked"
+                        break
+                    if decision.action == "allow" and decision.reason:
+                        advisory_notes.append(decision.reason)
+
+                if blocked_reason is not None:
+                    result = blocked_reason
+                else:
+                    # Execute tool via τ³-bench environment, recording the
+                    # canonical JSON result so τ³-bench's evaluator can replay
+                    # the trajectory deterministically.
+                    from tau2.data_model.message import ToolCall as _Tau2ToolCall
+                    tau2_call = _Tau2ToolCall(
+                        id=tc.id,
+                        name=func_name,
+                        arguments=func_args,
+                        requestor="assistant",
+                    )
+                    try:
+                        tool_msg = env.get_response(tau2_call)
+                        result = tool_msg.content if tool_msg.content is not None else ""
+                    except Exception as e:
+                        result = f"Error: {e}"
+                    if advisory_notes:
+                        result = result + "\n\n" + "\n".join(advisory_notes)
+                    # post_tool_call hooks
+                    for enforcer in stack:
+                        try:
+                            evs = enforcer.post_tool_call(proposed_call, result, task, turn)
+                            guardrail_events.extend(evs)
+                        except Exception as e:  # noqa: BLE001
+                            guardrail_events.append(
+                                GuardrailEvent(turn=turn, enforcer=enforcer.name,
+                                               hook="post_tool_call", action="error",
+                                               tool_name=func_name, reason=str(e))
+                            )
 
                 tool_call_entry = ToolCall(name=func_name, arguments=func_args, result=result)
                 tool_call_entries.append(tool_call_entry)
@@ -415,6 +490,15 @@ def run_task(
         user_conversation.append({"role": "assistant", "content": agent_text})
         trace.messages.append(Message(role="assistant", content=agent_text))
 
+        # Let escalation gate observe the assistant text for uncertainty markers.
+        for enforcer in stack:
+            observe = getattr(enforcer, "observe_assistant", None)
+            if callable(observe):
+                try:
+                    observe(agent_text)
+                except Exception:  # noqa: BLE001
+                    pass
+
         # Check for conversation end signals
         if "TRANSFERRED TO A HUMAN AGENT" in agent_text.upper():
             trace.final_response = agent_text
@@ -434,6 +518,19 @@ def run_task(
         user_conversation.append({"role": "user", "content": user_response})
         trace.messages.append(Message(role="user", content=user_response))
 
+        # pre_user_turn hooks for subsequent user turns.
+        for enforcer in stack:
+            try:
+                reminder, evs = enforcer.pre_user_turn(user_response, task, turn + 1)
+                guardrail_events.extend(evs)
+                if reminder:
+                    agent_messages.append({"role": "system", "content": reminder})
+            except Exception as e:  # noqa: BLE001
+                guardrail_events.append(
+                    GuardrailEvent(turn=turn + 1, enforcer=enforcer.name,
+                                   hook="pre_user_turn", action="error", reason=str(e))
+                )
+
         # Simple end detection: if user says goodbye/thanks and seems done
         lower = user_response.lower()
         if any(phrase in lower for phrase in ["goodbye", "that's all", "thank you, bye", "nothing else"]):
@@ -447,5 +544,15 @@ def run_task(
             if msg.role == "assistant" and msg.content:
                 trace.final_response = msg.content
                 break
+
+    # Persist guardrail audit trail for analysis phase.
+    trace.metadata["guardrail_events"] = [
+        {
+            "turn": e.turn, "enforcer": e.enforcer, "hook": e.hook,
+            "action": e.action, "tool_name": e.tool_name,
+            "reason": e.reason, "extra": e.extra,
+        }
+        for e in guardrail_events
+    ]
 
     return trace

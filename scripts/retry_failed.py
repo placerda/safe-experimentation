@@ -78,8 +78,8 @@ def main() -> None:
         # Defaults required by run_experiment.py — do NOT silently use
         # whatever was last cached. The retry must explicitly target the
         # current resource group's endpoint.
-        env.setdefault("AZURE_TENANT_ID", "85fbd7d4-c974-44b3-8f11-47bc1d72ee5b")
-        env.setdefault("AZURE_OPENAI_ENDPOINT", "https://aif-amth4qdo24te2.cognitiveservices.azure.com/")
+        env.setdefault("AZURE_TENANT_ID", "16b3c013-d300-468d-ac64-7eda0820b6d3")
+        env.setdefault("AZURE_OPENAI_ENDPOINT", "https://aif-safe-experimentation.cognitiveservices.azure.com/")
         env.setdefault("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
         env.setdefault("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
         env.setdefault("AZURE_OPENAI_USER_DEPLOYMENT", "gpt-4.1")

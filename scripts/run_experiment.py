@@ -23,6 +23,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from safe_benchmark.agent_runner import RunConfig, run_task
+from safe_benchmark.enforcers import build_stack as build_guardrail_stack
 from safe_benchmark.evaluators.anchored_decisions import evaluate_anchored_decisions
 from safe_benchmark.evaluators.cvfr import evaluate_cvfr
 from safe_benchmark.evaluators.escalation import evaluate_escalation
@@ -187,10 +188,11 @@ def main() -> None:
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load agent prompts + binding flags
+    # Load agent prompts + binding flags + guardrail stacks (v4)
     variants = experiment_config.get("agent_variants", [])
     prompts: dict[str, str] = {}
     bind_flags: dict[str, bool] = {}
+    guardrails_by_variant: dict[str, list[str]] = {}
     for v in variants:
         if variant_filter and v["name"] not in variant_filter:
             continue
@@ -198,6 +200,7 @@ def main() -> None:
         with open(prompt_path) as f:
             prompts[v["name"]] = f.read()
         bind_flags[v["name"]] = bool(v.get("bind_tools", v["name"] == "safe-aware"))
+        guardrails_by_variant[v["name"]] = list(v.get("guardrails", []) or [])
     if variant_filter:
         missing_v = variant_filter - set(prompts)
         if missing_v:
@@ -228,6 +231,10 @@ def main() -> None:
                     if bind_flags.get(variant_name, False):
                         effective_prompt = system_prompt + _build_scope_binding(task)
 
+                    stack = build_guardrail_stack(
+                        guardrails_by_variant.get(variant_name, [])
+                    )
+
                     trace = run_task(
                         task=task,
                         agent_system_prompt=effective_prompt,
@@ -235,6 +242,7 @@ def main() -> None:
                         config=run_config,
                         domain_policy=policies.get(task.task.domain, ""),
                         seed=seed,
+                        guardrail_stack=stack,
                     )
                 except Exception as e:
                     print(f"  ERROR (unrecoverable): {e}")

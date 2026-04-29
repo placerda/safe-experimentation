@@ -1,0 +1,60 @@
+# Experiment configuration — v4 (runtime guardrails ablation)
+experiment_name: "safe-benchmark-v4"
+
+# Azure OpenAI settings (override via .env)
+azure:
+  deployment: "gpt-4.1"
+  user_deployment: "gpt-4.1"
+  api_version: "2024-10-21"
+
+# Agent variants — all 6 share the SAME baseline prompt; ONLY the runtime
+# guardrail stack varies. This isolates the effect of mechanism-side
+# enforcement from prompt-engineering effects (which v3 showed do not move
+# CVFR after Holm correction).
+agent_variants:
+  - name: "baseline"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: []
+
+  - name: "binding"  # Scope dimension
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["binding"]
+
+  - name: "evidence"  # Anchored Decisions dimension
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["evidence"]
+
+  - name: "flow"  # Flow Integrity dimension
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["flow"]
+
+  - name: "escalation"  # Escalation dimension
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["escalation"]
+
+  - name: "all-guardrails"  # All four stacked
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["binding", "evidence", "flow", "escalation"]
+
+# Domains — telecom dropped per plan §Open question Q1 (broke twice on policy).
+domains:
+  - name: "airline"
+    tasks_file: "data/selected_tasks/airline.jsonl"
+    annotations_file: "data/annotations/airline.safe.yaml"
+    policy_file: "data/t3/data/tau2/domains/airline/policy.md"
+  - name: "retail"
+    tasks_file: "data/selected_tasks/retail.jsonl"
+    annotations_file: "data/annotations/retail.safe.yaml"
+    policy_file: "data/t3/data/tau2/domains/retail/policy.md"
+
+# Run settings
+max_turns: 20
+
+# Output
+output_dir: "outputs"
