@@ -86,6 +86,38 @@ class _RetryingAzureCliCredential:
         except Exception:
             pass
 
+    def _fallback_az_subprocess(self):
+        """Last-resort: shell out to `az account get-access-token` directly.
+
+        The azure-identity SDK's AzureCliCredential occasionally fails
+        with AADSTS530036 (refresh-token Conditional Access) even when
+        the underlying `az` CLI can still mint a valid bearer token —
+        because `az` keeps a separate cached access_token that can
+        outlive the refresh-token policy gate. This rescue path bypasses
+        the SDK entirely.
+        """
+        import subprocess
+        try:
+            cmd = ["az", "account", "get-access-token",
+                   "--scope", self._scope,
+                   "--tenant", self._tenant_id,
+                   "-o", "json"]
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    timeout=30, shell=False)
+            if result.returncode != 0:
+                return None
+            payload = json.loads(result.stdout)
+            # az returns expiresOn as 'YYYY-MM-DD HH:MM:SS.ffffff' (local).
+            from datetime import datetime
+            try:
+                expires_on = int(datetime.fromisoformat(
+                    payload["expiresOn"]).timestamp())
+            except Exception:
+                expires_on = int(self._t.time()) + 3000
+            return AccessToken(payload["accessToken"], expires_on)
+        except Exception:
+            return None
+
     def get_token(self, *scopes, **kwargs):
         cached = self._read_cache()
         if cached is not None:
@@ -99,6 +131,11 @@ class _RetryingAzureCliCredential:
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 self._t.sleep(2 * (attempt + 1))
+        # SDK exhausted; try direct `az` subprocess as last resort.
+        fallback = self._fallback_az_subprocess()
+        if fallback is not None:
+            self._write_cache(fallback)
+            return fallback
         raise last_err
 
 
