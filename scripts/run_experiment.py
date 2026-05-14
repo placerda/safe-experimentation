@@ -146,6 +146,15 @@ def main() -> None:
         default="",
         help="Comma-separated domains to include (default: all in config).",
     )
+    parser.add_argument(
+        "--resume-dir",
+        default="",
+        help=(
+            "Path to an existing run directory to resume into. "
+            "If set, traces already present in <resume-dir>/traces are skipped "
+            "and new outputs are written into the same directory."
+        ),
+    )
     args = parser.parse_args()
     task_filter = {t.strip() for t in args.tasks.split(",") if t.strip()}
     variant_filter = {v.strip() for v in args.variants.split(",") if v.strip()}
@@ -181,10 +190,16 @@ def main() -> None:
 
     # Set up run
     run_config = RunConfig.from_env()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    if args.run_tag:
-        run_id = f"{run_id}__{args.run_tag}"
-    run_dir = project_root / experiment_config.get("output_dir", "outputs") / "runs" / run_id
+    if args.resume_dir:
+        run_dir = Path(args.resume_dir).resolve()
+        if not run_dir.exists():
+            raise SystemExit(f"--resume-dir does not exist: {run_dir}")
+        print(f"Resuming into existing run dir: {run_dir}")
+    else:
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        if args.run_tag:
+            run_id = f"{run_id}__{args.run_tag}"
+        run_dir = project_root / experiment_config.get("output_dir", "outputs") / "runs" / run_id
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(parents=True, exist_ok=True)
 
@@ -223,6 +238,21 @@ def main() -> None:
             for task in annotated_tasks:
                 current += 1
                 seed_tag = f"seed{seed}"
+                if len(seeds) > 1:
+                    expected_trace_path = traces_dir / f"{variant_name}_{task.task.task_id}_{seed_tag}.json"
+                else:
+                    expected_trace_path = traces_dir / f"{variant_name}_{task.task.task_id}.json"
+                if args.resume_dir and expected_trace_path.exists():
+                    print(f"[{current}/{total}] SKIP (exists) {variant_name}/{seed_tag} {task.task.task_id}")
+                    try:
+                        with open(expected_trace_path, encoding="utf-8") as fh:
+                            existing_trace = AgentTrace.model_validate_json(fh.read())
+                        result = evaluate_trace(existing_trace, task)
+                        result["seed"] = seed
+                        all_results.append(result)
+                    except Exception as e:
+                        print(f"  WARN: could not re-evaluate existing trace: {e}")
+                    continue
                 print(f"[{current}/{total}] Running {variant_name}/{seed_tag} on {task.task.task_id}...")
 
                 try:
@@ -246,7 +276,6 @@ def main() -> None:
                     )
                 except Exception as e:
                     print(f"  ERROR (unrecoverable): {e}")
-                    from safe_benchmark.trace_schema import AgentTrace
                     trace = AgentTrace(
                         task_id=task.task.task_id,
                         domain=task.task.domain,
