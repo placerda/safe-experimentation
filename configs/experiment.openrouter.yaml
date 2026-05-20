@@ -1,0 +1,85 @@
+# Experiment configuration — OpenRouter open-source model sweep
+#
+# Runs the same v4 guardrail-ablation design as experiment.v4.yaml but against
+# open-source models served via OpenRouter (https://openrouter.ai).
+#
+# Prerequisites:
+#   1. Set LLM_PROVIDER=openrouter in .env (or pass --provider openrouter)
+#   2. Set OPENROUTER_API_KEY=<your key> in .env
+#   3. Optionally override OPENROUTER_DEPLOYMENT per run with --deployment
+#
+# Example — run the full sweep with Llama 3.3 70B:
+#   python scripts/run_experiment.py \
+#     --config configs/experiment.openrouter.yaml \
+#     --provider openrouter \
+#     --deployment meta-llama/llama-3.3-70b-instruct \
+#     --run-tag llama3.3-70b
+#
+# Suggested open-source agent models (via OpenRouter):
+#   meta-llama/llama-3.3-70b-instruct      (strong, free tier available)
+#   meta-llama/llama-3.1-8b-instruct       (fast/cheap, for ablations)
+#   mistralai/mistral-7b-instruct          (compact baseline)
+#   mistralai/mixtral-8x7b-instruct        (MoE, good instruction following)
+#   qwen/qwen-2.5-72b-instruct             (strong multilingual)
+#   deepseek/deepseek-chat                 (DeepSeek-V3, strong reasoning)
+#
+# NOTE: Tool-calling support varies across models. Models without native
+# function-calling will fall back to text-only responses and may show lower
+# SAFE scores for flow-integrity (tool steps will be missed). Check
+# https://openrouter.ai/models for tool-calling support flags.
+
+experiment_name: "safe-benchmark-openrouter"
+
+# OpenRouter settings (override via .env or --deployment / --provider flags)
+openrouter:
+  deployment: "meta-llama/llama-3.3-70b-instruct"
+  user_deployment: "meta-llama/llama-3.1-8b-instruct"  # cheaper model for user sim
+
+# Agent variants — same guardrail-ablation design as v4
+agent_variants:
+  - name: "baseline"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: []
+
+  - name: "binding"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["binding"]
+
+  - name: "evidence"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["evidence"]
+
+  - name: "flow"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["flow"]
+
+  - name: "escalation"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["escalation"]
+
+  - name: "all-guardrails"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["binding", "evidence", "flow", "escalation"]
+
+# Domains
+domains:
+  - name: "airline"
+    tasks_file: "data/selected_tasks/airline.jsonl"
+    annotations_file: "data/annotations/airline.safe.yaml"
+    policy_file: "data/t3/data/tau2/domains/airline/policy.md"
+  - name: "retail"
+    tasks_file: "data/selected_tasks/retail.jsonl"
+    annotations_file: "data/annotations/retail.safe.yaml"
+    policy_file: "data/t3/data/tau2/domains/retail/policy.md"
+
+# Run settings
+max_turns: 20
+
+# Output
+output_dir: "outputs"
