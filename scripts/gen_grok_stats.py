@@ -78,9 +78,8 @@ def main():
         lines.append("")
 
     lines.append(
-        "> **Note:** `binding-only` scores reflect 100% API errors (xAI credit exhaustion)."
-        " That variant ran last in both sweeps; all 120 binding-only tasks per model returned"
-        " HTTP 403 and produced no agent turns. Disregard binding-only Grok results.\n"
+        "> **Note:** `binding-only` was re-run after topping up xAI credits (original run"
+        " exhausted credits on that variant). All 120 binding-only tasks completed successfully.\n"
     )
     lines.append("## Cross-model comparison (safe-aware variant)\n")
     lines.append("| domain | metric | grok-3 | grok-3-mini |")
