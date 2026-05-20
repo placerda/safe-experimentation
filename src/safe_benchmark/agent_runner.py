@@ -1,7 +1,11 @@
-"""Agent runner — executes tasks through Azure OpenAI with tool-calling.
+"""Agent runner — executes tasks through Azure OpenAI or xAI (Grok) with tool-calling.
 
-Uses τ³-bench's environment for tool execution, and Azure OpenAI for the agent LLM.
-The user simulator follows the task's user_scenario instructions.
+Uses τ³-bench's environment for tool execution, and Azure OpenAI or the xAI API
+for the agent LLM. The user simulator follows the task's user_scenario instructions.
+
+Supported providers:
+  azure  — Azure OpenAI (default); requires AZURE_OPENAI_* env vars.
+  xai    — xAI Grok models via OpenAI-compatible API; requires XAI_API_KEY.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from typing import Any
 from azure.core.credentials import AccessToken, TokenCredential
 from azure.identity import AzureCliCredential, DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAI
 from pydantic import BaseModel
 
 from safe_benchmark.enforcers import Enforcer, GuardrailEvent
@@ -143,11 +147,25 @@ class _RetryingAzureCliCredential:
 def _model_kwargs(deployment: str, max_tokens: int, temperature: float) -> dict[str, Any]:
     """Return the right kwargs for chat.completions.create for this deployment.
 
-    gpt-5* models require ``max_completion_tokens`` and only accept the default
-    temperature. gpt-4* models still take ``max_tokens`` + arbitrary temperature.
+    gpt-5* / o1* / o3* models require ``max_completion_tokens`` and only accept
+    the default temperature. gpt-4* and grok-* models take ``max_tokens`` +
+    arbitrary temperature.
+
+    For OpenRouter models, the deployment name includes the org prefix
+    (e.g. "meta-llama/llama-3.3-70b-instruct"). Strip the prefix when checking
+    for reasoning-model patterns, and treat known reasoning models
+    (qwq-*, deepseek-r1*) the same as o1/o3.
     """
-    name = deployment.lower()
-    if name.startswith("gpt-5") or name.startswith("o1") or name.startswith("o3"):
+    # Strip OpenRouter org prefix if present (e.g. "openai/o3-mini" → "o3-mini")
+    short = deployment.split("/")[-1].lower() if "/" in deployment else deployment.lower()
+    reasoning = (
+        short.startswith("gpt-5")
+        or short.startswith("o1")
+        or short.startswith("o3")
+        or short.startswith("qwq")
+        or short.startswith("deepseek-r1")
+    )
+    if reasoning:
         return {"max_completion_tokens": max_tokens}
     return {"max_tokens": max_tokens, "temperature": temperature}
 
@@ -155,6 +173,10 @@ def _model_kwargs(deployment: str, max_tokens: int, temperature: float) -> dict[
 class RunConfig(BaseModel):
     """Configuration for an experiment run."""
 
+    # Provider: "azure" (default), "xai" (Grok via xAI API), or "openrouter"
+    provider: str = "azure"
+
+    # Azure OpenAI settings (used when provider="azure")
     azure_endpoint: str = ""
     azure_api_key: str = ""
     azure_deployment: str = ""
@@ -162,15 +184,42 @@ class RunConfig(BaseModel):
     user_deployment: str = ""  # For user simulator, can be same as agent
     max_turns: int = MAX_TURNS
 
+    # xAI settings (used when provider="xai")
+    xai_api_key: str = ""
+    xai_base_url: str = "https://api.x.ai/v1"
+
+    # OpenRouter settings (used when provider="openrouter")
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_deployment: str = ""
+    openrouter_user_deployment: str = ""
+
     @classmethod
     def from_env(cls) -> "RunConfig":
+        provider = os.getenv("LLM_PROVIDER", "azure").lower()
+        if provider == "openrouter":
+            deployment = os.getenv("OPENROUTER_DEPLOYMENT", "")
+            user_dep = os.getenv("OPENROUTER_USER_DEPLOYMENT", "") or deployment
+        else:
+            deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "") or os.getenv("XAI_DEPLOYMENT", "")
+            user_dep = (
+                os.getenv("AZURE_OPENAI_USER_DEPLOYMENT", "")
+                or os.getenv("XAI_USER_DEPLOYMENT", "")
+                or deployment
+            )
         return cls(
+            provider=provider,
             azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
             azure_api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
-            azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT", ""),
+            azure_deployment=deployment,
             azure_api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21"),
-            user_deployment=os.getenv("AZURE_OPENAI_USER_DEPLOYMENT", "")
-            or os.getenv("AZURE_OPENAI_DEPLOYMENT", ""),
+            user_deployment=user_dep,
+            xai_api_key=os.getenv("XAI_API_KEY", ""),
+            xai_base_url=os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
+            openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            openrouter_deployment=deployment if provider == "openrouter" else "",
+            openrouter_user_deployment=user_dep if provider == "openrouter" else "",
         )
 
 
@@ -337,7 +386,23 @@ def run_task(
 
     # Tool execution goes through environment.use_tool()
 
-    if config.azure_api_key:
+    if config.provider == "xai":
+        if not config.xai_api_key:
+            trace.error = "XAI_API_KEY is not set (required for provider=xai)"
+            return trace
+        client: AzureOpenAI | OpenAI = OpenAI(
+            api_key=config.xai_api_key,
+            base_url=config.xai_base_url,
+        )
+    elif config.provider == "openrouter":
+        if not config.openrouter_api_key:
+            trace.error = "OPENROUTER_API_KEY is not set (required for provider=openrouter)"
+            return trace
+        client = OpenAI(
+            api_key=config.openrouter_api_key,
+            base_url=config.openrouter_base_url,
+        )
+    elif config.azure_api_key:
         client = AzureOpenAI(
             azure_endpoint=config.azure_endpoint,
             api_key=config.azure_api_key,
@@ -366,6 +431,14 @@ def run_task(
             api_version=config.azure_api_version,
         )
 
+    # Resolve deployment names for whichever provider is active.
+    if config.provider == "openrouter":
+        agent_deployment = config.openrouter_deployment
+        user_dep = config.openrouter_user_deployment or agent_deployment
+    else:
+        agent_deployment = config.azure_deployment
+        user_dep = config.user_deployment or agent_deployment
+
     # Build full system prompt with domain policy
     full_system = agent_system_prompt
     if domain_policy:
@@ -381,7 +454,7 @@ def run_task(
     # Initial user message — small temperature jitter per seed for reproducible diversity
     user_temp = 0.2 + 0.1 * (seed % 3)
     initial_user_msg = _simulate_user_turn(
-        client, config.user_deployment, user_system_prompt, [], temperature=user_temp
+        client, user_dep, user_system_prompt, [], temperature=user_temp
     )
     agent_messages.append({"role": "user", "content": initial_user_msg})
     user_conversation.append({"role": "user", "content": initial_user_msg})
@@ -404,10 +477,10 @@ def run_task(
         try:
             # Agent turn
             response = client.chat.completions.create(
-                model=config.azure_deployment,
+                model=agent_deployment,
                 messages=agent_messages,
                 tools=openai_tools if openai_tools else None,
-                **_model_kwargs(config.azure_deployment, AGENT_MAX_TOKENS, 0.0),
+                **_model_kwargs(agent_deployment, AGENT_MAX_TOKENS, 0.0),
             )
         except Exception as e:
             trace.error = f"Agent API call failed at turn {turn}: {e}"
@@ -548,7 +621,7 @@ def run_task(
 
         # User simulator turn
         user_response = _simulate_user_turn(
-            client, config.user_deployment, user_system_prompt, user_conversation,
+            client, user_dep, user_system_prompt, user_conversation,
             temperature=user_temp,
         )
         agent_messages.append({"role": "user", "content": user_response})

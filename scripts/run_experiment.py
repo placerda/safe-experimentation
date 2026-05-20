@@ -55,7 +55,11 @@ def evaluate_trace(trace: AgentTrace, task: AnnotatedTask) -> dict[str, Any]:
         "task_id": trace.task_id,
         "domain": trace.domain,
         "agent_variant": trace.agent_variant,
-        "model": os.environ.get("AZURE_OPENAI_DEPLOYMENT", ""),
+        "model": (
+            os.environ.get("OPENROUTER_DEPLOYMENT", "")
+            or os.environ.get("XAI_DEPLOYMENT", "")
+            or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
+        ),
         "task_completed": trace.task_completed,
         "scope": scope_result.score,
         "scope_passed": scope_result.passed,
@@ -129,7 +133,12 @@ def main() -> None:
     parser.add_argument(
         "--deployment",
         default="",
-        help="Override AZURE_OPENAI_DEPLOYMENT for this run (e.g. gpt-4.1, gpt-5-mini).",
+        help="Override AZURE_OPENAI_DEPLOYMENT / XAI_DEPLOYMENT for this run (e.g. gpt-4.1, grok-3).",
+    )
+    parser.add_argument(
+        "--provider",
+        default="",
+        help="LLM provider: 'azure' (default), 'xai' (Grok), or 'openrouter'. Overrides LLM_PROVIDER env var.",
     )
     parser.add_argument(
         "--run-tag",
@@ -160,8 +169,16 @@ def main() -> None:
     variant_filter = {v.strip() for v in args.variants.split(",") if v.strip()}
     domain_filter = {d.strip() for d in args.domains.split(",") if d.strip()}
     seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
+    if args.provider:
+        os.environ["LLM_PROVIDER"] = args.provider
     if args.deployment:
-        os.environ["AZURE_OPENAI_DEPLOYMENT"] = args.deployment
+        provider = os.environ.get("LLM_PROVIDER", "azure").lower()
+        if provider == "xai":
+            os.environ["XAI_DEPLOYMENT"] = args.deployment
+        elif provider == "openrouter":
+            os.environ["OPENROUTER_DEPLOYMENT"] = args.deployment
+        else:
+            os.environ["AZURE_OPENAI_DEPLOYMENT"] = args.deployment
 
     project_root = Path(__file__).resolve().parent.parent
     config_path = project_root / args.config
