@@ -1,4 +1,4 @@
-"""Compute headline aggregates for the paper."""
+"""Compute headline aggregates from a run."""
 import json
 from collections import defaultdict
 from pathlib import Path

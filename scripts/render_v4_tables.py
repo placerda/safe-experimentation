@@ -1,8 +1,8 @@
-"""Render v4 paper-ready tables from outputs/reports/v4_stats.json.
+"""Render v4 summary tables from outputs/reports/v4_stats.json.
 
 Produces outputs/reports/v4_tables.md with three tables:
 
-  1. Per-dimension means by (variant, domain) — flattened, paper-friendly.
+  1. Per-dimension means by (variant, domain) — flattened, compact form.
   2. H1' headline table — Δ + Holm-corrected p, with stars.
   3. Guardrail event firing-rate per variant.
 

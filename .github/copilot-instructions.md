@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project evaluates AI agent behavior under constraints using the **[SAFE framework](https://pub.towardsai.net/safe-designing-responsible-agentic-systems-3dcc27075d4b)** (Scope, Anchored Decisions, Flow Integrity, Escalation) applied to a subset of T3 benchmark tasks in airline and retail domains. It compares a baseline agent against a SAFE-aware agent, producing metrics and traces to support an academic paper.
+This project evaluates AI agent behavior under constraints using the **[SAFE framework](https://pub.towardsai.net/safe-designing-responsible-agentic-systems-3dcc27075d4b)** (Scope, Anchored Decisions, Flow Integrity, Escalation) applied to a subset of T3 benchmark tasks in airline and retail domains. It compares a baseline agent against a SAFE-aware agent, producing metrics and traces for research analysis.
 
 **Key tools:** Python 3.11+, AgentOps Toolkit (orchestration/reporting), T3 benchmark (task source).
 

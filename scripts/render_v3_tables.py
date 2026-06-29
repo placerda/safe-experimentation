@@ -1,6 +1,5 @@
 """Render v3 results tables (markdown) from outputs/reports/v3_stats.json.
 
-Used by paper.v3.md placeholders: paste output where the markers say.
 Run AFTER `analyze_v3.py --auto` has produced v3_stats.json.
 
 Usage:
