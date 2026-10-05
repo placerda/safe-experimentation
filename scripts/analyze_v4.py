@@ -3,17 +3,15 @@
 Reads results.json from one or more run directories and produces:
 
   - Per-dimension means by (domain, variant) (S, A, F, E, CVFR, reward).
+  - SAFE-aware vs baseline differences per metric: task-clustered bootstrap
+    resampling tasks with replacement. Reports 95% CIs and two-sided bootstrap
+    p-values, with Holm correction across metrics.
   - H1' family (4 contrasts): for each dimension D and its target
-    variant X(D), paired bootstrap on Δ = mean(X(D)) − mean(baseline)
-    on the continuous score for D. Two-sided 95% CI + p-value (proportion
-    of bootstrap samples with sign opposite to observed Δ, doubled).
+    variant X(D), task-clustered bootstrap on Δ = mean(X(D)) − mean(baseline)
+    on the continuous score for D. Two-sided 95% CI + p-value.
     Holm-corrected within the family of 4.
-  - H2' family (5 contrasts): for each guardrail variant X, paired
-    TOST non-inferiority on tau2_reward with Δ_NI = 0.05. Bootstrap
-    one-sided lower 90% CI on (X - baseline). Reject null of inferiority
-    iff lower CI > -0.05. Holm-corrected within family of 5.
   - H3' descriptive: per dimension, gap between all-guardrails and the
-    best single-enforcer variant for that dimension. 90% CI of the gap.
+    best single-enforcer variant for that dimension. 95% CI of the gap.
   - Guardrail event firing rates per (variant, enforcer, action).
 
 Usage:
@@ -42,7 +40,6 @@ DIMENSIONS = [
     ("escalation", "E", "escalation"),
 ]
 GUARDRAIL_VARIANTS = ["binding", "evidence", "flow", "escalation", "all-guardrails"]
-DELTA_NI = 0.05
 BOOT_N = 10_000
 RNG_SEED = 20260429
 
@@ -50,52 +47,44 @@ RNG_SEED = 20260429
 # --------------- Stat helpers (no scipy) ---------------
 
 
-def paired_bootstrap_diff(
-    x: list[float], y: list[float], n_boot: int = BOOT_N, seed: int = RNG_SEED
+def clustered_bootstrap_diff(
+    paired_values: list[tuple[str, float, float]],
+    n_boot: int = BOOT_N,
+    seed: int = RNG_SEED,
 ) -> tuple[float, float, float, float]:
-    """Paired bootstrap on (x - y).
+    """Task-clustered bootstrap on paired differences.
 
-    Returns (observed_diff, ci_low_95, ci_high_95, two_sided_p).
-    p-value = 2 * min(P(boot_diff >= 0), P(boot_diff <= 0)).
+    ``paired_values`` contains (task_id, x, y). Resampling draws task IDs with
+    replacement and includes all paired observations for each selected task.
+    Returns (observed_diff, ci_low_95, ci_high_95, two_sided_p), where the
+    p-value is centered on the null by comparing bootstrap deviations from the
+    observed estimate against zero.
     """
-    assert len(x) == len(y), "paired bootstrap requires equal-length sequences"
-    n = len(x)
-    if n == 0:
+    if not paired_values:
         return 0.0, 0.0, 0.0, 1.0
-    diffs = [a - b for a, b in zip(x, y)]
+
+    by_task: dict[str, list[float]] = defaultdict(list)
+    for task_id, x, y in paired_values:
+        by_task[task_id].append(x - y)
+
+    task_ids = sorted(by_task)
+    diffs = [d for values in by_task.values() for d in values]
     obs = mean(diffs)
     rng = random.Random(seed)
     boot_means: list[float] = []
     for _ in range(n_boot):
-        sample = [diffs[rng.randint(0, n - 1)] for _ in range(n)]
-        boot_means.append(sum(sample) / n)
+        sample_diffs: list[float] = []
+        for _ in task_ids:
+            sample_diffs.extend(by_task[rng.choice(task_ids)])
+        boot_means.append(sum(sample_diffs) / len(sample_diffs))
+
     boot_means.sort()
     lo = boot_means[int(0.025 * n_boot)]
     hi = boot_means[int(0.975 * n_boot) - 1]
-    p_left = sum(1 for b in boot_means if b >= 0) / n_boot
-    p_right = sum(1 for b in boot_means if b <= 0) / n_boot
-    p_two = 2 * min(p_left, p_right)
-    p_two = min(1.0, p_two)
-    return obs, lo, hi, p_two
-
-
-def paired_bootstrap_lower_one_sided(
-    x: list[float], y: list[float], alpha: float = 0.10, n_boot: int = BOOT_N, seed: int = RNG_SEED
-) -> tuple[float, float]:
-    """One-sided lower CI bound at level (1-alpha) for mean(x-y)."""
-    n = len(x)
-    if n == 0:
-        return 0.0, 0.0
-    diffs = [a - b for a, b in zip(x, y)]
-    obs = mean(diffs)
-    rng = random.Random(seed)
-    boot_means: list[float] = []
-    for _ in range(n_boot):
-        sample = [diffs[rng.randint(0, n - 1)] for _ in range(n)]
-        boot_means.append(sum(sample) / n)
-    boot_means.sort()
-    lo = boot_means[int(alpha * n_boot)]
-    return obs, lo
+    centered = [b - obs for b in boot_means]
+    p_left = sum(1 for b in centered if b <= -abs(obs)) / n_boot
+    p_right = sum(1 for b in centered if b >= abs(obs)) / n_boot
+    return obs, lo, hi, min(1.0, 2 * min(p_left, p_right))
 
 
 def holm_correct(pvals: list[tuple[str, float]]) -> list[tuple[str, float, float]]:
@@ -135,14 +124,19 @@ def index_by_cell(rows: list[dict]) -> dict[tuple[str, str, str, int], dict]:
 def paired_arrays(
     idx: dict, variant_a: str, variant_b: str, domain: str, dim_key: str
 ) -> tuple[list[float], list[float], list[tuple[str, int]]]:
-    """Return aligned (x_a, x_b, [(task_id, seed)]) restricted to cells present
-    in both variants for the given domain."""
+    """Return aligned arrays restricted to cells present in both variants."""
+    pairs = paired_values(idx, variant_a, variant_b, domain, dim_key)
+    return [x for _, x, _ in pairs], [y for _, _, y in pairs], [(tid, 0) for tid, _, _ in pairs]
+
+
+def paired_values(
+    idx: dict, variant_a: str, variant_b: str, domain: str, dim_key: str
+) -> list[tuple[str, float, float]]:
+    """Return aligned (task_id, x_a, x_b) for cells present in both variants."""
     keys_a = {k for k in idx if k[0] == variant_a and k[1] == domain}
     keys_b = {k for k in idx if k[0] == variant_b and k[1] == domain}
-    paired_keys = sorted(
-        {(k[2], k[3]) for k in keys_a} & {(k[2], k[3]) for k in keys_b}
-    )
-    xa, xb, labels = [], [], []
+    paired_keys = sorted({(k[2], k[3]) for k in keys_a} & {(k[2], k[3]) for k in keys_b})
+    pairs: list[tuple[str, float, float]] = []
     for tid, seed in paired_keys:
         ra = idx.get((variant_a, domain, tid, seed))
         rb = idx.get((variant_b, domain, tid, seed))
@@ -152,10 +146,10 @@ def paired_arrays(
         vb = rb.get(dim_key)
         if va is None or vb is None:
             continue
-        xa.append(float(va))
-        xb.append(float(vb))
-        labels.append((tid, seed))
-    return xa, xb, labels
+        pairs.append((tid, float(va), float(vb)))
+    return pairs
+
+
 
 
 # --------------- Main analysis ---------------
@@ -203,14 +197,14 @@ def main(run_dirs: list[Path]) -> None:
     h1_pvals: list[tuple[str, float]] = []
     for dim_key, dim_label, target in DIMENSIONS:
         for d in domains:
-            xa, xb, _ = paired_arrays(idx, target, "baseline", d, dim_key)
-            if not xa:
+            pairs = paired_values(idx, target, "baseline", d, dim_key)
+            if not pairs:
                 continue
-            obs, lo, hi, p = paired_bootstrap_diff(xa, xb)
+            obs, lo, hi, p = clustered_bootstrap_diff(pairs)
             label = f"H1_{dim_label}_{d}"
             h1_results.append({
                 "label": label, "dimension": dim_label, "domain": d,
-                "target_variant": target, "n_pairs": len(xa),
+                "target_variant": target, "n_pairs": len(pairs),
                 "delta_mean": obs, "ci95_low": lo, "ci95_high": hi, "p_value": p,
             })
             h1_pvals.append((label, p))
@@ -223,51 +217,44 @@ def main(run_dirs: list[Path]) -> None:
         r["reject_h0"] = adj < 0.05
     out["h1_per_dimension"] = h1_results
 
-    # ---- H2' family — TOST non-inferiority on tau2_reward, Holm within 5
-    h2_results: list[dict] = []
-    h2_pvals: list[tuple[str, float]] = []
-    for v in GUARDRAIL_VARIANTS:
-        if v not in variants:
-            continue
-        for d in domains:
-            xa, xb, _ = paired_arrays(idx, v, "baseline", d, "tau2_reward")
-            if not xa:
-                continue
-            obs, lo = paired_bootstrap_lower_one_sided(xa, xb, alpha=0.10)
-            non_inferior = lo > -DELTA_NI
-            # pseudo-p for Holm: distance from boundary scaled to (0,1)
-            # Smaller is "more significant" for non-inferiority (CI further from -delta_NI).
-            # We use 1 - non_inferior_margin / delta_NI clipped to [0, 1].
-            margin = lo - (-DELTA_NI)  # positive => non-inferior
-            pseudo_p = max(0.0, min(1.0, 1 - margin / DELTA_NI)) if margin >= 0 else 1.0
-            label = f"H2_{v}_{d}"
-            h2_results.append({
-                "label": label, "variant": v, "domain": d,
-                "n_pairs": len(xa), "delta_mean": obs, "ci90_low": lo,
-                "delta_ni": DELTA_NI, "non_inferior": non_inferior,
-                "pseudo_p_for_holm": pseudo_p,
-            })
-            h2_pvals.append((label, pseudo_p))
-    holm = holm_correct(h2_pvals)
+    # ---- SAFE-aware vs baseline differences per metric, Holm across metrics
+    metric_results: list[dict] = []
+    metric_pvals: list[tuple[str, float]] = []
+    metrics = ["scope", "anchored_decisions", "flow_integrity", "escalation", "safe_overall", "tau2_reward"]
+    if "safe-aware" in variants:
+        for metric in metrics:
+            for d in domains:
+                pairs = paired_values(idx, "safe-aware", "baseline", d, metric)
+                if not pairs:
+                    continue
+                obs, lo, hi, p = clustered_bootstrap_diff(pairs)
+                label = f"safe_aware_vs_baseline_{metric}_{d}"
+                metric_results.append({
+                    "label": label, "metric": metric, "domain": d,
+                    "n_pairs": len(pairs), "n_tasks": len({tid for tid, _, _ in pairs}),
+                    "delta_mean": obs, "ci95_low": lo, "ci95_high": hi, "p_value": p,
+                })
+                metric_pvals.append((label, p))
+    holm = holm_correct(metric_pvals)
     holm_map = {lbl: (raw, adj) for lbl, raw, adj in holm}
-    for r in h2_results:
-        raw, adj = holm_map[r["label"]]
+    for r in metric_results:
+        _raw, adj = holm_map[r["label"]]
         r["p_holm"] = adj
-        r["reject_inferiority"] = r["non_inferior"] and adj < 0.05
-    out["h2_non_inferiority"] = h2_results
+        r["reject_h0"] = adj < 0.05
+    out["safe_aware_vs_baseline"] = metric_results
 
     # ---- H3' descriptive — composability of all-guardrails
     h3_results: list[dict] = []
     if "all-guardrails" in variants:
         for dim_key, dim_label, target in DIMENSIONS:
             for d in domains:
-                xa, xb, _ = paired_arrays(idx, "all-guardrails", target, d, dim_key)
-                if not xa:
+                pairs = paired_values(idx, "all-guardrails", target, d, dim_key)
+                if not pairs:
                     continue
-                obs, lo, hi, _ = paired_bootstrap_diff(xa, xb)
+                obs, lo, hi, _ = clustered_bootstrap_diff(pairs)
                 h3_results.append({
                     "dimension": dim_label, "domain": d,
-                    "n_pairs": len(xa),
+                    "n_pairs": len(pairs),
                     "delta_mean_vs_target": obs,
                     "ci95_low": lo, "ci95_high": hi,
                     "interpretation": (
@@ -333,15 +320,14 @@ def main(run_dirs: list[Path]) -> None:
         )
     lines.append("")
 
-    lines.append("## H2' — non-inferiority on τ³ reward (Δ_NI=0.05, Holm within 5)\n")
-    lines.append("| variant | domain | n | Δ mean | 90% lower | non-inferior | p_holm | reject inferiority |")
-    lines.append("|---|---|---:|---:|---:|---|---:|---|")
-    for r in h2_results:
+    lines.append("## SAFE-aware vs baseline (task-clustered bootstrap, Holm across metrics)\n")
+    lines.append("| metric | domain | pairs | tasks | Δ mean | 95% CI | p | p_holm | reject H0 |")
+    lines.append("|---|---|---:|---:|---:|---|---:|---:|---|")
+    for r in metric_results:
         lines.append(
-            f"| {r['variant']} | {r['domain']} | {r['n_pairs']} "
-            f"| {r['delta_mean']:+.3f} | {r['ci90_low']:+.3f} "
-            f"| {'yes' if r['non_inferior'] else 'no'} | {r['p_holm']:.3f} "
-            f"| {'**yes**' if r['reject_inferiority'] else 'no'} |"
+            f"| {r['metric']} | {r['domain']} | {r['n_pairs']} | {r['n_tasks']} "
+            f"| {r['delta_mean']:+.3f} | [{r['ci95_low']:+.3f}, {r['ci95_high']:+.3f}] "
+            f"| {r['p_value']:.3f} | {r['p_holm']:.3f} | {'**yes**' if r['reject_h0'] else 'no'} |"
         )
     lines.append("")
 

@@ -44,6 +44,8 @@ def test_returns_reward_for_real_trace(annotated_tasks):
     )
     if not trace_path.exists():
         pytest.skip("reference trace not present")
+    if not Path("data/t3/data/tau2/domains/airline/tasks.json").exists():
+        pytest.skip("tau2 benchmark data not present")
     trace = AgentTrace.model_validate_json(
         trace_path.read_bytes().decode("utf-8", "replace")
     )
