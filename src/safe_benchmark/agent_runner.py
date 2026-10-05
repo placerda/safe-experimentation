@@ -319,7 +319,7 @@ def run_task(
     trace.metadata["guardrails"] = [e.name for e in stack]
 
     try:
-        toolkit, env, openai_tools = _load_domain_env(task.task.domain)
+        env, toolkit, openai_tools = _load_domain_env(task.task.domain)
     except Exception as e:
         trace.error = f"Failed to load domain environment: {e}"
         return trace
@@ -460,7 +460,9 @@ def run_task(
                                            hook="pre_tool_call", action="error",
                                            tool_name=func_name, reason=str(e))
                         )
-                        continue
+                        # Fail closed: an enforcer error blocks the call.
+                        blocked_reason = f"Blocked: guardrail {enforcer.name} error"
+                        break
                     if decision.action == "block":
                         blocked_reason = decision.reason or "blocked"
                         break
