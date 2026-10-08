@@ -7,8 +7,10 @@ import pytest
 
 from scripts.stats_v6 import (
     analyze,
+    analyze_by_domain,
     compare,
     index_rows,
+    load_rows,
     main,
     mcnemar_exact,
     metric_value,
@@ -132,6 +134,49 @@ def test_summarize_counts_exclusions_and_rules():
     assert s["safeguard"]["blocks_by_rule"] == {"A:unanchored": 1, "F:confirm": 3}
     airline = {e["variant"]: e for e in summarize(rows, "airline")}
     assert "baseline" not in airline
+
+
+def test_load_rows_prefers_rescored(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "results.json").write_text(
+        json.dumps([_row("baseline", "retail_000", tau2_reward=None)]), encoding="utf-8"
+    )
+    (run / "results.rescored.json").write_text(
+        json.dumps([_row("baseline", "retail_000", tau2_reward=1.0)]), encoding="utf-8"
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "results.json").write_text(json.dumps([_row("baseline", "airline_000")]), encoding="utf-8")
+    rows = load_rows([run, other])
+    assert [r["tau2_reward"] for r in rows] == [1.0, 1.0]
+    assert [r["domain"] for r in rows] == ["retail", "airline"]
+
+
+def test_summarize_counts_missing_reward():
+    rows = [
+        _row("baseline", "retail_000", tau2_reward=None),
+        _row("baseline", "retail_001"),
+        _row("baseline", "retail_002", tau2_reward=None, error="x"),
+    ]
+    s = {e["variant"]: e for e in summarize(rows)}
+    assert s["baseline"]["n_missing_reward"] == 1
+    assert s["baseline"]["success"] == pytest.approx(1.0)
+
+
+def test_analyze_by_domain_families():
+    rows = []
+    for i in range(6):
+        for dom in ("airline", "retail"):
+            t = f"{dom}_{i:03d}"
+            rows.append(_row("baseline", t, any_unsafe_write=dom == "airline"))
+            rows.append(_row("safeguard", t))
+    results = analyze_by_domain(rows, n_boot=100)
+    assert {r["family"] for r in results} == {"primary-airline", "primary-retail"}
+    by = {(r["family"], r["metric"]): r for r in results}
+    assert by[("primary-airline", "any_unsafe_write")]["diff"] == pytest.approx(-1.0)
+    assert by[("primary-retail", "any_unsafe_write")]["diff"] == pytest.approx(0.0)
+    assert all(r["n_tasks"] == 6 for r in results)
 
 
 def test_main_writes_outputs(tmp_path):

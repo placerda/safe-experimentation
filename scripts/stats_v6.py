@@ -1,6 +1,7 @@
 """V6 statistics — paired outcome-level comparisons for SAFE-Guard.
 
-Reads ``results.json`` from one or more run directories and writes
+Reads ``results.rescored.json`` (written by ``rescore_tau2.py``) or, if
+absent, ``results.json`` from one or more run directories and writes
 ``stats.md``, ``stats.csv`` and ``stats.json`` to the output directory
 (default: the first run directory).
 
@@ -23,6 +24,10 @@ independent observations):
   compares safeguard with each single-rule-group ablation. Primary-tier
   metrics are the pre-registered outcome metrics; secondary metrics are
   exploratory.
+- Per-domain ``primary-<domain>`` families repeat the primary comparisons
+  within each domain; they are exploratory and corrected only within the
+  domain family.
+- Valid rows with no ``tau2_reward`` are counted per variant ("no reward").
 
 Usage:
     python scripts/stats_v6.py outputs/runs/<run_dir> [<run_dir> ...]
@@ -78,12 +83,16 @@ VARIANT_ORDER = ["baseline", "safe-prompt", "safeguard", *ABLATIONS]
 
 
 def load_rows(run_dirs: list[Path]) -> list[dict]:
+    """Load rows, preferring ``results.rescored.json`` (see rescore_tau2.py)."""
     rows: list[dict] = []
     for d in run_dirs:
-        rj = d / "results.json"
+        rj = d / "results.rescored.json"
+        if not rj.exists():
+            rj = d / "results.json"
         if not rj.exists():
             print(f"warning: {rj} not found", file=sys.stderr)
             continue
+        print(f"loaded {rj}", file=sys.stderr)
         rows.extend(json.loads(rj.read_text(encoding="utf-8")))
     return rows
 
@@ -238,7 +247,12 @@ def summarize(rows: list[dict], domain: str | None = None) -> list[dict]:
     variants += sorted((set(by_variant) | set(excluded)) - set(variants))
     for v in variants:
         rs = by_variant.get(v, [])
-        entry: dict = {"variant": v, "n_valid": len(rs), "n_excluded": excluded.get(v, 0)}
+        entry: dict = {
+            "variant": v,
+            "n_valid": len(rs),
+            "n_excluded": excluded.get(v, 0),
+            "n_missing_reward": sum(1 for r in rs if r.get("tau2_reward") is None),
+        }
         for metric in METRICS:
             vals = [x for x in (metric_value(r, metric) for r in rs) if x is not None]
             entry[metric] = mean(vals) if vals else None
@@ -269,12 +283,13 @@ def summary_table(summary: list[dict]) -> list[str]:
     cols = ["success", "any_unsafe_write", "commission_error", "unsafe_extra_writes",
             "missed_gold_writes", "transferred", "blocked_calls"]
     lines = [
-        "| variant | n | excl. | " + " | ".join(cols) + " |",
-        "|---|---|---|" + "---|" * len(cols),
+        "| variant | n | excl. | no reward | " + " | ".join(cols) + " |",
+        "|---|---|---|---|" + "---|" * len(cols),
     ]
     for e in summary:
         lines.append(
             f"| {e['variant']} | {e['n_valid']} | {e['n_excluded']} | "
+            f"{e.get('n_missing_reward', 0)} | "
             + " | ".join(_fmt(e[c]) for c in cols)
             + " |"
         )
@@ -329,11 +344,17 @@ def write_outputs(out_dir: Path, run_dirs: list[Path], rows: list[dict], results
         if e["blocks_by_rule"]:
             rules = ", ".join(f"{k}: {v}" for k, v in e["blocks_by_rule"].items())
             md.append(f"- **{e['variant']}**: {rules}")
-    for family in ("primary", "ablation"):
+    families = ["primary", "ablation"]
+    families += sorted({r["family"] for r in results} - set(families))
+    for family in families:
         fam = [r for r in results if r["family"] == family]
         if not fam:
             continue
-        md.extend(["", f"## {family.capitalize()} comparisons", ""])
+        if family.startswith("primary-"):
+            title = f"Primary comparisons — {family.split('-', 1)[1]} only (exploratory)"
+        else:
+            title = f"{family.capitalize()} comparisons"
+        md.extend(["", f"## {title}", ""])
         md.extend(comparison_table(fam))
     md.append("")
     (out_dir / "stats.md").write_text("\n".join(md), encoding="utf-8")
@@ -366,6 +387,17 @@ def analyze(rows: list[dict], n_boot: int = BOOT_N) -> list[dict]:
     return run_family(idx, "primary", primary, n_boot) + run_family(idx, "ablation", ablation, n_boot)
 
 
+def analyze_by_domain(rows: list[dict], n_boot: int = BOOT_N) -> list[dict]:
+    """Primary comparisons restricted to each domain (family ``primary-<domain>``)."""
+    results: list[dict] = []
+    for domain in sorted({r.get("domain") for r in rows if r.get("domain")}):
+        idx = index_rows([r for r in rows if r.get("domain") == domain])
+        present = {v for v, _, _ in idx}
+        comps = [(t, c) for t, c in PRIMARY_COMPARISONS if t in present and c in present]
+        results += run_family(idx, f"primary-{domain}", comps, n_boot)
+    return results
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("run_dirs", nargs="+", type=Path)
@@ -377,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
     if not rows:
         print("no results found", file=sys.stderr)
         return 1
-    results = analyze(rows, n_boot=args.n_boot)
+    results = analyze(rows, n_boot=args.n_boot) + analyze_by_domain(rows, n_boot=args.n_boot)
     out_dir = args.out or args.run_dirs[0]
     write_outputs(out_dir, args.run_dirs, rows, results)
     print(f"wrote {out_dir / 'stats.md'} ({len(results)} comparisons)")
