@@ -1,0 +1,64 @@
+# Experiment configuration — v6 (SAFE-Guard: oracle-free runtime policy enforcement)
+#
+# Runs from v5 onward predating commit 78c1b15 used a harness with a broken
+# domain-env unpack order and are not comparable. v6 also removes every
+# annotation-derived (gold-leaking) enforcer: all guarded variants use only
+# SAFE-Guard, whose rules derive from the published domain policy and the
+# observed tool-call history, never from task annotations or gold actions.
+experiment_name: "safe-benchmark-v6"
+
+azure:
+  deployment: "gpt-5.4-1"
+  user_deployment: "gpt-5.4-1"
+  api_version: "2025-04-01-preview"
+
+# bind_tools is explicitly false everywhere: the legacy scope binding reads
+# annotations, which would leak task-specific information.
+agent_variants:
+  - name: "baseline"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: []
+
+  - name: "safe-prompt"  # SAFE as prompt guidance only (no enforcement)
+    prompt_file: "configs/agents/safe-prompt-only.prompt.md"
+    bind_tools: false
+    guardrails: []
+
+  - name: "safeguard"  # Full SAFE-Guard (S + A + F + E)
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["safeguard"]
+
+  - name: "safeguard-noS"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["safeguard-noS"]
+
+  - name: "safeguard-noA"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["safeguard-noA"]
+
+  - name: "safeguard-noF"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["safeguard-noF"]
+
+  - name: "safeguard-noE"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    bind_tools: false
+    guardrails: ["safeguard-noE"]
+
+domains:
+  - name: "airline"
+    tasks_file: "data/selected_tasks/airline.jsonl"
+    annotations_file: "data/annotations/airline.safe.yaml"
+    policy_file: "data/t3/data/tau2/domains/airline/policy.md"
+  - name: "retail"
+    tasks_file: "data/selected_tasks/retail.jsonl"
+    annotations_file: "data/annotations/retail.safe.yaml"
+    policy_file: "data/t3/data/tau2/domains/retail/policy.md"
+
+max_turns: 20
+output_dir: "outputs"

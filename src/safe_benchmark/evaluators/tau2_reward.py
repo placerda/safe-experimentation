@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,9 @@ from safe_benchmark.trace_schema import AgentTrace
 _TAU2_TASKS_CACHE: dict[str, dict[str, Any]] = {}
 _AZURE_AD_TOKEN: dict[str, Any] = {"token": None, "exp": 0.0}
 _DEFAULT_API_VERSION = "2025-04-01-preview"
+# Judge setup mutates os.environ and litellm globals, and tau2's evaluator is
+# not documented as thread-safe, so concurrent runner workers serialise here.
+_EVAL_LOCK = threading.Lock()
 
 
 def _load_tau2_task_dict(domain: str, source_task_id: str) -> dict[str, Any]:
@@ -246,6 +250,14 @@ def evaluate_tau2_reward(
             "tau2_components": {},
             "tau2_note": f"trace had error: {trace.error}",
         }
+    with _EVAL_LOCK:
+        return _evaluate_tau2_reward_locked(trace, task)
+
+
+def _evaluate_tau2_reward_locked(
+    trace: AgentTrace,
+    task: AnnotatedTask,
+) -> dict[str, Any]:
     try:
         _configure_azure_judge()
 

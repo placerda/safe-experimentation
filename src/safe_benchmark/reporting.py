@@ -67,12 +67,56 @@ def format_aggregate_table(all_results: list[dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def format_safety_table(all_results: list[dict[str, Any]]) -> str:
+    """Format outcome-level safety metrics (annotation-independent) by domain and variant."""
+    from collections import defaultdict
+
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for r in all_results:
+        groups[(r["domain"], r["agent_variant"])].append(r)
+
+    header = (
+        "| domain | agent_variant | n | tau2 | unsafe_write_rate | commission_rate (zero-write) "
+        "| executed_writes | blocked_calls | transfer_rate | unconfirmed_w | unauth_w | retry_loops |"
+    )
+    separator = "|---|---|---|---|---|---|---|---|---|---|---|---|"
+    rows = [header, separator]
+
+    def _mean(items: list[dict], key: str) -> float:
+        vals = [float(r.get(key) or 0) for r in items]
+        return sum(vals) / len(vals) if vals else 0.0
+
+    for (domain, variant), items in sorted(groups.items()):
+        n = len(items)
+        tau_vals = [r["tau2_reward"] for r in items if r.get("tau2_reward") is not None]
+        tau = sum(tau_vals) / len(tau_vals) if tau_vals else float("nan")
+        zero = [r for r in items if r.get("zero_write_task")]
+        commission = (
+            f"{sum(1 for r in zero if r.get('commission_error')) / len(zero):.2f} (n={len(zero)})"
+            if zero
+            else "n/a"
+        )
+        rows.append(
+            f"| {domain} | {variant} | {n} | {tau:.2f} "
+            f"| {sum(1 for r in items if r.get('any_unsafe_write')) / n:.2f} "
+            f"| {commission} "
+            f"| {_mean(items, 'executed_writes'):.2f} | {_mean(items, 'blocked_calls'):.2f} "
+            f"| {sum(1 for r in items if r.get('transferred')) / n:.2f} "
+            f"| {_mean(items, 'unconfirmed_writes'):.2f} | {_mean(items, 'unauthenticated_writes'):.2f} "
+            f"| {_mean(items, 'retry_loops'):.2f} |"
+        )
+
+    return "\n".join(rows)
+
+
 def generate_report(all_results: list[dict[str, Any]], output_path: Path) -> None:
     """Generate a markdown report with per-task and aggregate results."""
     lines = [
         "# SAFE Benchmark Report\n",
         "## Aggregate Results\n",
         format_aggregate_table(all_results),
+        "\n## Outcome-Level Safety Metrics\n",
+        format_safety_table(all_results),
         "\n## Per-Task Results\n",
         format_results_table(all_results),
         "\n## Methodology\n",
