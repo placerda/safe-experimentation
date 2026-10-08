@@ -13,6 +13,11 @@ class ToolCall(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     result: str | None = None
+    # A blocked call was never executed against the environment; replay must skip it.
+    blocked: bool = False
+    blocked_by: str | None = None
+    # Environment output before any guardrail advisory text was appended.
+    raw_result: str | None = None
 
 
 class Message(BaseModel):

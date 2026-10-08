@@ -28,6 +28,7 @@ from safe_benchmark.trace_schema import AgentTrace
 
 _TAU2_TASKS_CACHE: dict[str, dict[str, Any]] = {}
 _AZURE_AD_TOKEN: dict[str, Any] = {"token": None, "exp": 0.0}
+_DEFAULT_API_VERSION = "2025-04-01-preview"
 
 
 def _load_tau2_task_dict(domain: str, source_task_id: str) -> dict[str, Any]:
@@ -45,22 +46,42 @@ def _load_tau2_task_dict(domain: str, source_task_id: str) -> dict[str, Any]:
     raise ValueError(f"τ³-bench task id={source_task_id} not in {domain_file}")
 
 
+def _get_cognitive_services_token():
+    """Mint an Entra ID token for Azure OpenAI.
+
+    Tries a tenant-pinned AzureCliCredential first (the judge previously failed
+    with AuthenticationError when DefaultAzureCredential picked a credential
+    from the wrong tenant), then falls back to DefaultAzureCredential.
+    """
+    scope = "https://cognitiveservices.azure.com/.default"
+    tenant_id = os.environ.get("AZURE_TENANT_ID") or None
+    try:
+        from azure.identity import AzureCliCredential
+
+        return AzureCliCredential(tenant_id=tenant_id).get_token(scope)
+    except Exception:
+        from azure.identity import DefaultAzureCredential
+
+        return DefaultAzureCredential().get_token(scope)
+
+
 def _configure_azure_judge() -> None:
     """Configure tau2 + litellm to use the Azure OpenAI judge for NL assertions.
 
     Requirements (read from os.environ):
       - AZURE_OPENAI_ENDPOINT          (e.g. https://aif-...openai.azure.com/)
       - AZURE_OPENAI_JUDGE_DEPLOYMENT  (e.g. gpt-4.1)
-      - AZURE_OPENAI_API_VERSION       (defaults to 2024-12-01-preview)
+      - AZURE_OPENAI_API_VERSION       (defaults to _DEFAULT_API_VERSION)
 
-    Auth: prefers AZURE_OPENAI_API_KEY if set; otherwise uses
-    DefaultAzureCredential to mint an Entra ID token (refreshed on demand).
+    Auth: prefers AZURE_OPENAI_API_KEY if set; otherwise mints an Entra ID
+    token via AzureCliCredential pinned to AZURE_TENANT_ID (falling back to
+    DefaultAzureCredential), refreshed on demand.
     """
     endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
     deployment = os.environ.get(
         "AZURE_OPENAI_JUDGE_DEPLOYMENT", os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
     )
-    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", _DEFAULT_API_VERSION)
     if not endpoint or not deployment:
         return  # judge unavailable; tau2 will hit its own auth path and likely fail
 
@@ -92,10 +113,7 @@ def _configure_azure_judge() -> None:
     # No API key → use Entra ID. Refresh token if stale (tokens last ~1h).
     now = time.time()
     if _AZURE_AD_TOKEN["token"] is None or _AZURE_AD_TOKEN["exp"] - now < 60:
-        from azure.identity import DefaultAzureCredential
-
-        cred = DefaultAzureCredential()
-        tok = cred.get_token("https://cognitiveservices.azure.com/.default")
+        tok = _get_cognitive_services_token()
         _AZURE_AD_TOKEN["token"] = tok.token
         _AZURE_AD_TOKEN["exp"] = float(tok.expires_on)
     os.environ["AZURE_AD_TOKEN"] = _AZURE_AD_TOKEN["token"]
@@ -106,6 +124,9 @@ def _configure_azure_judge() -> None:
     # `azure_ad_token` kwarg into every `litellm.completion(model="azure/...", ...)`
     # call. Patch once.
     import litellm as _litellm
+
+    # Newer deployments (gpt-5.x) reject some legacy params tau2 passes.
+    _litellm.drop_params = True
 
     if not getattr(_litellm.completion, "_safe_azure_patched", False):
         _orig_completion = _litellm.completion
@@ -122,7 +143,7 @@ def _configure_azure_judge() -> None:
                 )
                 kwargs.setdefault(
                     "api_version",
-                    os.environ.get("AZURE_API_VERSION", "2024-12-01-preview"),
+                    os.environ.get("AZURE_API_VERSION", _DEFAULT_API_VERSION),
                 )
             return _orig_completion(*args, **kwargs)
 
@@ -148,7 +169,11 @@ def _trace_to_tau2_messages(trace: AgentTrace) -> list:
     )
 
     out: list = []
-    pending_tool_call_ids: list[str] = []
+    # FIFO of (tau2 call id or None if the call was blocked, raw env result).
+    # Blocked calls never reached the environment, so they (and their paired
+    # tool message carrying the block reason) must be excluded from the τ²
+    # replay; otherwise set_state() re-executes them and the DB diverges.
+    pending: list[tuple[str | None, str | None]] = []
     counter = 0
 
     for m in trace.messages:
@@ -161,9 +186,12 @@ def _trace_to_tau2_messages(trace: AgentTrace) -> list:
         elif role == "assistant":
             tcs = []
             for tc in tool_calls:
+                if getattr(tc, "blocked", False):
+                    pending.append((None, None))
+                    continue
                 counter += 1
                 tc_id = f"call_{counter:04d}"
-                pending_tool_call_ids.append(tc_id)
+                pending.append((tc_id, getattr(tc, "raw_result", None)))
                 tcs.append(
                     Tau2ToolCall(
                         id=tc_id,
@@ -172,6 +200,9 @@ def _trace_to_tau2_messages(trace: AgentTrace) -> list:
                         requestor="assistant",
                     )
                 )
+            if not tcs and not (content or "").strip() and tool_calls:
+                # Every call in this turn was blocked and there is no text.
+                continue
             out.append(
                 AssistantMessage(
                     role="assistant",
@@ -180,16 +211,17 @@ def _trace_to_tau2_messages(trace: AgentTrace) -> list:
                 )
             )
         elif role == "tool":
-            tc_id = (
-                pending_tool_call_ids.pop(0)
-                if pending_tool_call_ids
-                else f"call_unknown_{counter}"
-            )
+            if pending:
+                tc_id, raw = pending.pop(0)
+            else:
+                tc_id, raw = f"call_unknown_{counter}", None
+            if tc_id is None:
+                continue
             out.append(
                 ToolMessage(
                     role="tool",
                     id=tc_id,
-                    content=content or "",
+                    content=raw if raw is not None else (content or ""),
                     requestor="assistant",
                 )
             )

@@ -324,6 +324,19 @@ def run_task(
         trace.error = f"Failed to load domain environment: {e}"
         return trace
 
+    # Give environment-aware enforcers (SAFE-Guard) read access to the live
+    # τ² environment so they can check state preconditions (e.g. order status).
+    for enforcer in stack:
+        bind_env = getattr(enforcer, "bind_env", None)
+        if callable(bind_env):
+            try:
+                bind_env(env, task.task.domain)
+            except Exception as e:  # noqa: BLE001
+                guardrail_events.append(
+                    GuardrailEvent(turn=0, enforcer=enforcer.name, hook="bind_env",
+                                   action="error", reason=str(e))
+                )
+
     # Apply guardrail filter_tools hook (BindingEnforcer uses this).
     for enforcer in stack:
         try:
@@ -447,6 +460,8 @@ def run_task(
                 # from ALLOW decisions are accumulated and appended to the
                 # tool result as a postscript.
                 blocked_reason: str | None = None
+                blocked_by: str | None = None
+                raw_result: str | None = None
                 advisory_notes: list[str] = []
                 for enforcer in stack:
                     try:
@@ -462,9 +477,11 @@ def run_task(
                         )
                         # Fail closed: an enforcer error blocks the call.
                         blocked_reason = f"Blocked: guardrail {enforcer.name} error"
+                        blocked_by = enforcer.name
                         break
                     if decision.action == "block":
                         blocked_reason = decision.reason or "blocked"
+                        blocked_by = enforcer.name
                         break
                     if decision.action == "allow" and decision.reason:
                         advisory_notes.append(decision.reason)
@@ -487,6 +504,9 @@ def run_task(
                         result = tool_msg.content if tool_msg.content is not None else ""
                     except Exception as e:
                         result = f"Error: {e}"
+                    # Keep the exact environment output: τ² replay compares
+                    # tool results verbatim, so advisory notes must not leak in.
+                    raw_result = result
                     if advisory_notes:
                         result = result + "\n\n" + "\n".join(advisory_notes)
                     # post_tool_call hooks
@@ -501,7 +521,14 @@ def run_task(
                                                tool_name=func_name, reason=str(e))
                             )
 
-                tool_call_entry = ToolCall(name=func_name, arguments=func_args, result=result)
+                tool_call_entry = ToolCall(
+                    name=func_name,
+                    arguments=func_args,
+                    result=result,
+                    blocked=blocked_reason is not None,
+                    blocked_by=blocked_by,
+                    raw_result=raw_result,
+                )
                 tool_call_entries.append(tool_call_entry)
                 trace.tool_calls_log.append(tool_call_entry)
 
