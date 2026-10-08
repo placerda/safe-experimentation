@@ -116,4 +116,22 @@ def build_stack(names: list[str]) -> list[Enforcer]:
     }
     canonical = ["binding", "evidence", "flow", "escalation"]
     requested = set(names)
-    return [registry[n]() for n in canonical if n in requested and n in registry]
+    stack: list[Enforcer] = [
+        registry[n]() for n in canonical if n in requested and n in registry
+    ]
+
+    # SAFE-Guard: oracle-free policy enforcer (does not read annotations or gold
+    # actions). Ablations disable one SAFE dimension each.
+    from safe_benchmark.enforcers.safeguard import SafeGuardEnforcer
+
+    safeguard_variants: dict[str, dict[str, bool]] = {
+        "safeguard": {},
+        "safeguard-noS": {"scope": False},
+        "safeguard-noA": {"anchor": False},
+        "safeguard-noF": {"flow": False},
+        "safeguard-noE": {"escalation": False},
+    }
+    for n in names:
+        if n in safeguard_variants:
+            stack.append(SafeGuardEnforcer(**safeguard_variants[n]))
+    return stack
