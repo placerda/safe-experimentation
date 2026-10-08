@@ -8,14 +8,24 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from azure.core.credentials import AccessToken, TokenCredential
 from azure.identity import AzureCliCredential, DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
-from openai import AzureOpenAI
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AzureOpenAI,
+    BadRequestError,
+    InternalServerError,
+    RateLimitError,
+)
 from pydantic import BaseModel
 
 from safe_benchmark.enforcers import Enforcer, GuardrailEvent
@@ -32,6 +42,68 @@ load_dotenv()
 MAX_TURNS = 20
 USER_SIMULATOR_MAX_TOKENS = 300
 AGENT_MAX_TOKENS = 1024
+
+# Retry policy for transient Azure OpenAI failures (429 / 5xx / network).
+API_MAX_ATTEMPTS = 8
+API_BACKOFF_BASE_S = 2.0
+API_BACKOFF_CAP_S = 60.0
+_sleep = time.sleep  # patched in tests
+
+
+class UserSimulatorError(RuntimeError):
+    """Raised when the user simulator cannot produce a turn after retries."""
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, (RateLimitError, APITimeoutError, APIConnectionError, InternalServerError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        status = getattr(exc, "status_code", None) or 0
+        return status == 429 or status >= 500
+    return False
+
+
+def _is_content_filter(exc: Exception) -> bool:
+    if not isinstance(exc, BadRequestError):
+        return False
+    code = getattr(exc, "code", None)
+    return code == "content_filter" or "content_filter" in str(exc)
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    for key, scale in (("retry-after-ms", 0.001), ("retry-after", 1.0)):
+        value = headers.get(key)
+        if value is None:
+            continue
+        try:
+            return max(0.0, float(value) * scale)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _create_with_retry(client: Any, **kwargs: Any) -> Any:
+    """chat.completions.create with exponential backoff on transient errors.
+
+    Non-retryable errors (e.g. 400 content filter, auth) are raised immediately;
+    retryable ones are re-raised after API_MAX_ATTEMPTS.
+    """
+    for attempt in range(1, API_MAX_ATTEMPTS + 1):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as exc:  # noqa: BLE001
+            if not _is_retryable(exc) or attempt == API_MAX_ATTEMPTS:
+                raise
+            delay = _retry_after_seconds(exc)
+            if delay is None:
+                delay = min(API_BACKOFF_CAP_S, API_BACKOFF_BASE_S * (2 ** (attempt - 1)))
+            delay = min(API_BACKOFF_CAP_S, delay) + random.uniform(0, 1.0)
+            _sleep(delay)
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 class _RetryingAzureCliCredential:
@@ -268,15 +340,21 @@ def _simulate_user_turn(
             user_messages.append({"role": "assistant", "content": msg.get("content", "")})
 
     try:
-        response = client.chat.completions.create(
+        response = _create_with_retry(
+            client,
             model=deployment,
             messages=user_messages,
             **_model_kwargs(deployment, USER_SIMULATOR_MAX_TOKENS, temperature),
         )
         return response.choices[0].message.content or ""
-    except Exception:
-        # Content filter or other API error — return a generic fallback
-        return "I'd like help with my request, please."
+    except Exception as exc:  # noqa: BLE001
+        if _is_content_filter(exc):
+            # Content filter is deterministic for this prompt; keep the
+            # conversation moving with a neutral message.
+            return "I'd like help with my request, please."
+        # Any other failure (incl. exhausted 429 retries) must NOT silently
+        # inject a fake user message into the trace.
+        raise UserSimulatorError(str(exc)) from exc
 
 
 def run_task(
@@ -393,30 +471,39 @@ def run_task(
 
     # Initial user message — small temperature jitter per seed for reproducible diversity
     user_temp = 0.2 + 0.1 * (seed % 3)
-    initial_user_msg = _simulate_user_turn(
-        client, config.user_deployment, user_system_prompt, [], temperature=user_temp
-    )
-    agent_messages.append({"role": "user", "content": initial_user_msg})
-    user_conversation.append({"role": "user", "content": initial_user_msg})
-    trace.messages.append(Message(role="user", content=initial_user_msg))
+    sim_failed = False
+    try:
+        initial_user_msg = _simulate_user_turn(
+            client, config.user_deployment, user_system_prompt, [], temperature=user_temp
+        )
+    except UserSimulatorError as e:
+        trace.error = f"User simulator API call failed at turn 0: {e}"
+        sim_failed = True
+        initial_user_msg = ""
 
-    # Fire pre_user_turn hooks on the initial user message.
-    for enforcer in stack:
-        try:
-            reminder, evs = enforcer.pre_user_turn(initial_user_msg, task, 0)
-            guardrail_events.extend(evs)
-            if reminder:
-                agent_messages.append({"role": "system", "content": reminder})
-        except Exception as e:  # noqa: BLE001
-            guardrail_events.append(
-                GuardrailEvent(turn=0, enforcer=enforcer.name, hook="pre_user_turn",
-                               action="error", reason=str(e))
-            )
+    if not sim_failed:
+        agent_messages.append({"role": "user", "content": initial_user_msg})
+        user_conversation.append({"role": "user", "content": initial_user_msg})
+        trace.messages.append(Message(role="user", content=initial_user_msg))
 
-    for turn in range(config.max_turns):
+        # Fire pre_user_turn hooks on the initial user message.
+        for enforcer in stack:
+            try:
+                reminder, evs = enforcer.pre_user_turn(initial_user_msg, task, 0)
+                guardrail_events.extend(evs)
+                if reminder:
+                    agent_messages.append({"role": "system", "content": reminder})
+            except Exception as e:  # noqa: BLE001
+                guardrail_events.append(
+                    GuardrailEvent(turn=0, enforcer=enforcer.name, hook="pre_user_turn",
+                                   action="error", reason=str(e))
+                )
+
+    for turn in range(0 if sim_failed else config.max_turns):
         try:
             # Agent turn
-            response = client.chat.completions.create(
+            response = _create_with_retry(
+                client,
                 model=config.azure_deployment,
                 messages=agent_messages,
                 tools=openai_tools if openai_tools else None,
@@ -576,10 +663,14 @@ def run_task(
             pass
 
         # User simulator turn
-        user_response = _simulate_user_turn(
-            client, config.user_deployment, user_system_prompt, user_conversation,
-            temperature=user_temp,
-        )
+        try:
+            user_response = _simulate_user_turn(
+                client, config.user_deployment, user_system_prompt, user_conversation,
+                temperature=user_temp,
+            )
+        except UserSimulatorError as e:
+            trace.error = f"User simulator API call failed at turn {turn + 1}: {e}"
+            break
         agent_messages.append({"role": "user", "content": user_response})
         user_conversation.append({"role": "user", "content": user_response})
         trace.messages.append(Message(role="user", content=user_response))
