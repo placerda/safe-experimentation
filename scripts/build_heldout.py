@@ -115,9 +115,18 @@ def main() -> None:
     parser.add_argument("--n", type=int, default=30)
     parser.add_argument("--seed", type=int, default=20261008)
     parser.add_argument("--out", type=Path, default=Path("data/heldout"))
+    parser.add_argument(
+        "--exclude-dirs",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Extra annotation dirs whose task ids must also be excluded (e.g. an earlier held-out set).",
+    )
     args = parser.parse_args()
 
     dev = load_all_annotations(ROOT / "data" / "annotations")
+    for extra in args.exclude_dirs:
+        dev = {**dev, **load_all_annotations(ROOT / extra)}
     dev_ids = {int(tid.split("_")[1]) for tid in dev if tid.startswith("retail_")}
 
     tasks = json.loads((TAU2 / "retail" / "tasks.json").read_bytes().decode("utf-8", "replace"))
@@ -139,8 +148,9 @@ def main() -> None:
     for task in picked:
         rec = build_record("retail", task)
         rec["selection_reason"] = (
-            f"Held-out (seed={args.seed}): retail task not in dev set; "
-            "not inspected during SAFE-Guard rule development."
+            f"Held-out (seed={args.seed}): retail task not in dev set"
+            + (f" or {', '.join(str(d) for d in args.exclude_dirs)}" if args.exclude_dirs else "")
+            + "; not inspected during SAFE-Guard rule development."
         )
         records.append(rec)
         annotations.append(_annotation(rec["task_id"], _gold_action_names(task)))
