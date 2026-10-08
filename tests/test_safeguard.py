@@ -405,6 +405,43 @@ def test_retail_cancel_reason(retail_env):
     assert "S:cancel_reason" in rules
 
 
+def _exchange_args(env, order, new_id):
+    user = env.tools.db.users[order.user_id]
+    item = order.items[0]
+    return item, {
+        "order_id": order.order_id,
+        "item_ids": [item.item_id],
+        "new_item_ids": [new_id],
+        "payment_method_id": next(iter(user.payment_methods)),
+    }
+
+
+def test_retail_exchange_same_item_blocked(retail_env):
+    g = _guard(retail_env, "retail")
+    order = _pick_order(retail_env, "delivered")
+    item, args = _exchange_args(retail_env, order, order.items[0].item_id)
+    _retail_cancel_setup(g, retail_env, order, confirm=False)
+    _confirm(g, f"I will exchange item {item.item_id} in order {order.order_id}. Proceed?")
+    action, rules = _call(g, "exchange_delivered_order_items", args)
+    assert action == "block"
+    assert "S:same_item" in rules
+
+
+def test_retail_exchange_different_variant_not_same_item(retail_env):
+    g = _guard(retail_env, "retail")
+    order = _pick_order(retail_env, "delivered")
+    item = order.items[0]
+    product = retail_env.tools.db.products[item.product_id]
+    other = next((v for v in product.variants if v != item.item_id), None)
+    if other is None:
+        pytest.skip("product has a single variant")
+    _, args = _exchange_args(retail_env, order, other)
+    _retail_cancel_setup(g, retail_env, order, confirm=False)
+    _confirm(g, f"I will exchange item {item.item_id} for {other}. Proceed?")
+    _action, rules = _call(g, "exchange_delivered_order_items", args)
+    assert "S:same_item" not in rules
+
+
 def test_scope_ablation_suppresses_scope_rules(retail_env):
     g = _guard(retail_env, "retail", scope=False)
     order = _pick_order(retail_env, "delivered")

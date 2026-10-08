@@ -1021,7 +1021,9 @@ class SafeGuardEnforcer(Enforcer):
                     "Items of an order can only be exchanged or modified once. Collect "
                     "all items in a single call.",
                 ))
-            out += self._scope_item_change(order, user, args, require_different=not exchange)
+            # Retail policy requires a different option of the same product for both
+            # modify and exchange; a same-id swap is a no-op write.
+            out += self._scope_item_change(order, user, args, require_different=True)
         elif name == "return_delivered_order_items":
             if status != "delivered":
                 out.append(status_violation("delivered"))
