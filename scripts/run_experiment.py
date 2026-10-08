@@ -167,6 +167,16 @@ def main() -> None:
         default=1,
         help="Number of (task, variant, seed) jobs to run concurrently (default: 1).",
     )
+    parser.add_argument(
+        "--tasks-dir",
+        default="data/selected_tasks",
+        help="Directory of selected-task JSONL files, relative to the project root (default: data/selected_tasks).",
+    )
+    parser.add_argument(
+        "--annotations-dir",
+        default="data/annotations",
+        help="Directory of SAFE annotation YAML files, relative to the project root (default: data/annotations).",
+    )
     args = parser.parse_args()
     task_filter = {t.strip() for t in args.tasks.split(",") if t.strip()}
     variant_filter = {v.strip() for v in args.variants.split(",") if v.strip()}
@@ -182,8 +192,8 @@ def main() -> None:
         experiment_config = yaml.safe_load(f)
 
     # Load tasks
-    tasks_dir = project_root / "data" / "selected_tasks"
-    annotations_dir = project_root / "data" / "annotations"
+    tasks_dir = project_root / args.tasks_dir
+    annotations_dir = project_root / args.annotations_dir
     annotated_tasks = load_annotated_tasks(tasks_dir, annotations_dir)
     # Only run domains declared in the config: undeclared domains have no policy.
     config_domains = {d["name"] for d in experiment_config.get("domains", []) or []}

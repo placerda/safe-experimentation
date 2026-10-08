@@ -42,6 +42,8 @@ def _evaluate(trace: AgentTrace, task) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path)
+    parser.add_argument("--tasks-dir", type=Path, default=Path("data/selected_tasks"))
+    parser.add_argument("--annotations-dir", type=Path, default=Path("data/annotations"))
     args = parser.parse_args()
 
     os.chdir(ROOT)  # tau2 task files are resolved relative to the repo root
@@ -49,7 +51,7 @@ def main() -> int:
 
     run_dir = args.run_dir if args.run_dir.is_absolute() else ROOT / args.run_dir
     rows = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))
-    tasks = load_annotated_tasks(ROOT / "data" / "selected_tasks", ROOT / "data" / "annotations")
+    tasks = load_annotated_tasks(ROOT / args.tasks_dir, ROOT / args.annotations_dir)
     task_by_id = {t.task.task_id: t for t in tasks}
 
     targets = [r for r in rows if _needs_rescore(r)]
