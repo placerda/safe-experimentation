@@ -70,3 +70,14 @@ Run `transaction-closure-agreement-regression`: retail_104, both baseline
 and safeguard-transaction, seed index 0, two workers, unchanged deployment
 and budget. Freeze new source first and preserve both original outcomes.
 This selected post-comparison check is not part of the completed 68 cells.
+
+### Retained separate shared-runner result
+
+Frozen at `882e298`, 76 hashes verified, two valid cells with no execution
+errors. Baseline retail_104 reward zero, zero non-gold writes, one missing
+gold write; treatment reward one, zero non-gold writes, zero missing gold
+writes. The treatment address prerequisite fired. This new stochastic
+trajectory is not a replay of the prior "that's all correct" failure; unit
+regressions reproduce that exact classifier defect. Do not combine the
+selected outcome with the completed 34-pair table or attribute its recovery
+solely to the shared termination correction.
