@@ -641,11 +641,23 @@ def run_task(
             for tm in tool_messages:
                 trace.messages.append(Message(role="tool", content=tm["content"]))
 
-            # Continue to let agent respond after tool results (no user turn yet)
-            continue
+            # Trusted preparation can present directly without another model turn.
+            present_manifest = False
+            for enforcer in stack:
+                present = getattr(enforcer, "should_present_after_tools", None)
+                if callable(present):
+                    try:
+                        present_manifest = bool(present()) or present_manifest
+                    except Exception as exc:  # noqa: BLE001 - trusted-path failure
+                        trace.error = f"Guardrail manifest readiness check failed: {exc}"
+                        break
+            if trace.error:
+                break
+            if not present_manifest:
+                continue
 
-        # Agent produced a text response (no tool calls) — this goes to the user
-        agent_text = assistant_msg.content or ""
+        # Tool-call prose is already recorded and must not serve as authorization.
+        agent_text = "" if assistant_msg.tool_calls else assistant_msg.content or ""
         for enforcer in stack:
             render = getattr(enforcer, "render_assistant", None)
             if callable(render):

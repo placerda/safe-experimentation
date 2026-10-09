@@ -81,3 +81,31 @@ Future comparisons must apply the revised harness to both arms.
 The full suite passes 206 tests. A follow-up retail_104 execution is a
 selected development regression check, not independent confirmation.
 Additional confirmation friction is not eliminated by these repairs.
+
+At `15617c0`, the follow-up `retail_104` trajectory executed all three
+correct return requests, including the backpack without the vacuum cleaner.
+No return-coverage false positive or effective non-gold write occurred.
+Nevertheless full reward remained **0**, with two gold writes missing:
+repeated agent-written confirmations followed by trusted confirmations
+exhausted the 20-turn budget before the pending-order requests could execute.
+Evidence is in `outputs/runs/transaction-repairs2-regression` and its sibling
+analysis directory. This is a new stochastic trajectory, not a counterfactual
+proof that the parser repair caused the difference.
+
+## Direct trusted presentation
+
+The next development version presents the runtime-generated manifest
+immediately after staging tool calls, without requiring an extra model text
+turn. The treatment reminder asks the agent to prepare ready independent
+actions together and not request a separate agent-written-plan approval.
+This preserves exact arguments, ordered consumption, one-use approval,
+state validation and fail-closed policy checks. Reads and other variants
+retain their existing dispatch behavior. State-dependent batches may still
+require renewed approval after earlier writes; there is no speculative
+execution or automatic approval.
+
+Integration cases cover one staged action and two independently targeted
+actions, with no execution until a user approves the trusted presentation.
+The full suite passes 207 tests. A selected `retail_104` live check will
+measure whether this implementation actually completes within the unchanged
+budget; a passing synthetic test is not an empirical task-success claim.

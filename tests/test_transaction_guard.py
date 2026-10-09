@@ -210,7 +210,8 @@ def test_registered_variant():
     assert len(stack) == 1 and isinstance(stack[0], TransactionGuardEnforcer)
 
 
-def test_runner_presents_manifest_and_executes_only_after_confirmation(guard, monkeypatch):
+@pytest.mark.parametrize("batch", [False, True])
+def test_runner_presents_manifest_and_executes_only_after_confirmation(guard, monkeypatch, batch):
     import json
     from safe_benchmark import agent_runner as runner
 
@@ -222,7 +223,7 @@ def test_runner_presents_manifest_and_executes_only_after_confirmation(guard, mo
         if tc.name == "find_user_id_by_email":
             content = "user_001"
         elif tc.name == "get_order_details":
-            content = json.dumps(db.orders["#W111"])
+            content = json.dumps(db.orders[tc.arguments["order_id"]])
         else:
             content = "success"
         return SimpleNamespace(content=content)
@@ -240,12 +241,20 @@ def test_runner_presents_manifest_and_executes_only_after_confirmation(guard, mo
             message=SimpleNamespace(content=text, tool_calls=calls), finish_reason="stop",
         )])
 
+    ready = [call(), call("#W222")] if batch else [call()]
+    prepared = response()
+    prepared.choices[0].message.tool_calls = [
+        SimpleNamespace(
+            id=f"prepare-{index}",
+            function=SimpleNamespace(name=tc.name, arguments=json.dumps(tc.arguments)),
+        ) for index, tc in enumerate(ready)
+    ]
+    reads = [response("get_order_details", {"order_id": tc.arguments["order_id"]}) for tc in ready]
     responses = iter([
         response("find_user_id_by_email", {"email": "test@example.invalid"}),
-        response("get_order_details", {"order_id": "#W111"}),
-        response(call().name, call().arguments),
-        response(text="Misleading agent summary without target or address."),
-        response(call().name, call().arguments),
+        *reads,
+        prepared,
+        *[response(tc.name, tc.arguments) for tc in ready],
         response(text="The approved action is complete."),
     ])
     monkeypatch.setattr(runner, "_create_with_retry", lambda *_, **__: next(responses))
@@ -263,13 +272,17 @@ def test_runner_presents_manifest_and_executes_only_after_confirmation(guard, mo
     task = SimpleNamespace(task=SimpleNamespace(task_id="synthetic", domain="retail"))
     trace = runner.run_task(
         task, "baseline prompt", "safeguard-transaction",
-        runner.RunConfig(azure_api_key="synthetic", max_turns=8),
+        runner.RunConfig(azure_api_key="synthetic", max_turns=10),
         guardrail_stack=[TransactionGuardEnforcer()],
     )
     assert trace.error is None
-    assert executed.count("modify_pending_order_address") == 1
+    assert executed.count("modify_pending_order_address") == len(ready)
     writes = [tc for tc in trace.tool_calls_log if tc.name == call().name]
-    assert writes[0].blocked and not writes[1].blocked
+    assert all(tc.blocked for tc in writes[:len(ready)])
+    assert all(not tc.blocked for tc in writes[len(ready):])
     assert "2 New Street" in seen[0] and "#W111" in seen[0]
+    if batch:
+        assert "#W222" in seen[0]
+    assert len(seen) == 2
     assert "Misleading agent summary" not in seen[0]
-    assert writes[1].raw_result == "success"
+    assert all(tc.raw_result == "success" for tc in writes[len(ready):])

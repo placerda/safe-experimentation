@@ -128,6 +128,9 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
         )
         return auth.rendered_text
 
+    def should_present_after_tools(self) -> bool:
+        return bool(self.authorization.pending)
+
     def observe_assistant(self, agent_text: str) -> None:
         super().observe_assistant(agent_text)
         auth = self.authorization
@@ -165,9 +168,12 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
         if not auth.approved:
             return (
                 "Runtime protocol: state-changing calls without an exact approved "
-                "manifest will be prepared, NOT executed. On preparation feedback, "
-                "send a text response to present the trusted manifest; do not retry "
-                "before the user replies. After 'yes', repeat the listed calls with "
+                "manifest will be prepared, NOT executed. Call the tools to prepare "
+                "the ready actions; the runner immediately presents their trusted "
+                "manifest for confirmation. Do not first ask for confirmation of an "
+                "agent-written plan: that creates a duplicate approval step. Where "
+                "possible prepare all ready independent actions in the same tool-call "
+                "message. Do not retry before the user replies. After 'yes', repeat the listed calls with "
                 "exactly the same arguments and order. Corrections require a new "
                 "manifest and confirmation. Do not claim prepared actions completed.",
                 result[1],
@@ -227,8 +233,8 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
             ))
             return Decision(
                 action="block", enforcer=self.name,
-                reason="Action prepared but NOT executed. Send a text response now "
-                       "to present the trusted manifest and obtain a new user confirmation. "
+                reason="Action prepared but NOT executed. The runner will present "
+                       "the trusted manifest and obtain a new user confirmation. "
                        "Do not retry writes before the user responds.",
             ), events
         return decision, events
