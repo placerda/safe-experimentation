@@ -305,6 +305,46 @@ def test_explicit_return_withdrawal_revises_coverage():
     }
 
 
+def test_return_co_delivery_reference_is_not_a_return_goal():
+    g, _, _ = setup()
+    for text in (
+        "Return the camera that came with the bicycle.",
+        "Return item_b from #W2 which arrived with item_c.",
+    ):
+        assert "intent_return_coverage" not in rules(
+            g, "return_delivered_order_items", dict(order_id="#W2", item_ids=["item_b"]),
+            text,
+        )
+    assert "intent_return_coverage" in rules(
+        g, "return_delivered_order_items", dict(order_id="#W2", item_ids=["item_b"]),
+        "Return the camera that came with the bicycle and return the bicycle.",
+    )
+
+
+def test_return_only_replaces_previous_goals_in_target_order():
+    g, _, _ = setup()
+    for correction in ("Return only the camera.", "Return only item_b from #W2."):
+        assert "intent_return_coverage" not in {
+            v.rule for v in check_intent(
+                g, "return_delivered_order_items",
+                dict(order_id="#W2", item_ids=["item_b"]),
+                ["Return the camera and bicycle.", correction],
+            )
+        }
+
+
+def test_return_only_wrong_order_or_unmatched_item_does_not_clear_goals():
+    g, _, _ = setup()
+    for correction in ("Return only item_b from #W1.", "Return only the backpack."):
+        assert "intent_return_coverage" in {
+            v.rule for v in check_intent(
+                g, "return_delivered_order_items",
+                dict(order_id="#W2", item_ids=["item_b"]),
+                ["Return the camera and bicycle.", correction],
+            )
+        }
+
+
 def test_explicit_address_correction_replaces_new_place_reference():
     g, old, _ = setup()
     g.pre_user_turn("The luggage set was sent to my new place. Return the camera.", None, 0)

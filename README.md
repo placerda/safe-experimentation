@@ -122,3 +122,8 @@ repair restricts recognized same-order cheapest requests to available
 same-product peer items in that order, rather than the whole catalog.
 This change is not part of the frozen comparison and has no new prospective
 effectiveness result; inspected heldout2 tasks are now development data.
+Further return-coverage and address-source repairs, the selected four-task
+calibration (2/4 full successes), and a discovered reference-parsing regression
+are documented in [development intent repairs](docs/development-intent-repairs.md).
+The later apostrophe-normalization harness repair applies to both variants;
+no historical rewards are rewritten.

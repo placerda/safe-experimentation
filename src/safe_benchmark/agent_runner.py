@@ -54,6 +54,13 @@ class UserSimulatorError(RuntimeError):
     """Raised when the user simulator cannot produce a turn after retries."""
 
 
+def _user_ended_conversation(response: str) -> bool:
+    lower = response.lower().replace("\u2019", "'").replace("\u2018", "'")
+    return any(
+        phrase in lower for phrase in ["goodbye", "that's all", "thank you, bye", "nothing else"]
+    )
+
+
 def _is_retryable(exc: Exception) -> bool:
     if isinstance(exc, (RateLimitError, APITimeoutError, APIConnectionError, InternalServerError)):
         return True
@@ -699,8 +706,7 @@ def run_task(
                 )
 
         # Simple end detection: if user says goodbye/thanks and seems done
-        lower = user_response.lower()
-        if any(phrase in lower for phrase in ["goodbye", "that's all", "thank you, bye", "nothing else"]):
+        if _user_ended_conversation(user_response):
             trace.task_completed = True
             trace.final_response = agent_text
             break

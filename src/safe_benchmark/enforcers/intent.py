@@ -64,7 +64,10 @@ def _return_coverage(order: Any, requests: list[str], names: set[str]) -> set[st
     items = _attr(order, "items", []) or []
     expected: set[str] = set()
     for request in requests:
-        for clause in re.split(r"[.!?;\n]+", request.replace("**", "").replace("`", "")):
+        for clause in re.split(
+            r"[.!?;\n]+|\band\s+(?=(?:I\s+(?:want\s+to\s+)?)?return\b)",
+            request.replace("**", "").replace("`", ""), flags=re.I,
+        ):
             if not re.search(r"\breturn\b", clause, re.I):
                 continue
             withdrawing = bool(re.search(r"\b(?:don't|do not)\s+return\b", clause, re.I))
@@ -75,26 +78,40 @@ def _return_coverage(order: Any, requests: list[str], names: set[str]) -> set[st
                 _norm(order_id) for order_id in order_ids
             }:
                 continue
+            # A co-delivery reference identifies the target; it is not another goal.
+            target_clause = re.split(
+                r"\b(?:that|which)\s+(?:came|arrived|was delivered)\s+with\b",
+                clause, maxsplit=1, flags=re.I,
+            )[0]
+            exclusive = bool(re.search(r"\breturn\s+only\b", target_clause, re.I))
             mentioned_ids = {
                 _norm(_attr(item, "item_id")) for item in items
-                if re.search(rf"(?<!\w){re.escape(str(_attr(item, 'item_id')))}(?!\w)", clause)
+                if re.search(
+                    rf"(?<!\w){re.escape(str(_attr(item, 'item_id')))}(?!\w)", target_clause,
+                )
             }
             if mentioned_ids:
                 if withdrawing:
                     expected.difference_update(mentioned_ids)
+                elif exclusive:
+                    expected = mentioned_ids
                 else:
                     expected.update(mentioned_ids)
                 continue
+            matched: set[str] = set()
             for item in items:
                 name = str(_attr(item, "name", ""))
                 # Singular/plural variants only; do not equate arbitrary substrings.
-                singular = re.sub(r"\bbookshelves\b", "bookshelf", clause, flags=re.I)
+                singular = re.sub(r"\bbookshelves\b", "bookshelf", target_clause, flags=re.I)
                 singular = re.sub(r"\b([a-z]+)s\b", r"\1", singular, flags=re.I)
                 if _mentions(name, singular, names):
-                    if withdrawing:
-                        expected.discard(_norm(_attr(item, "item_id")))
-                    else:
-                        expected.add(_norm(_attr(item, "item_id")))
+                    matched.add(_norm(_attr(item, "item_id")))
+            if withdrawing:
+                expected.difference_update(matched)
+            elif exclusive and matched:
+                expected = matched
+            else:
+                expected.update(matched)
     return expected
 
 
