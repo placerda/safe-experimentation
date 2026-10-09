@@ -68,7 +68,7 @@ Ready actions may be staged in one ordered tool-call message, giving one
 trusted confirmation. Preparation binds later snapshots to exactly predicted
 effects for two locally modeled retail operations: address replacement and
 pending-order cancellation (including rounded gift-card refunds). Prediction
-works on copies, never performs writes, and is included in the signed manifest.
+works on copies, never performs writes, and is bound in the manifest digest.
 The dispatch gate still compares the complete relevant live user/target snapshot
 with that expected state. Missing effects, additional changes and wrong values
 require renewed approval. Other transitions are not predicted and may stale

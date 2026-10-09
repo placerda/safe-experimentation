@@ -6,7 +6,7 @@ import pytest
 
 from safe_benchmark.enforcers.transaction import TransactionGuardEnforcer
 from safe_benchmark.trace_schema import ToolCall
-from tau2.domains.retail.data_model import RetailDB
+from tau2.domains.retail.data_model import GiftCard, RetailDB
 from tau2.domains.retail.tools import RetailTools
 
 
@@ -130,3 +130,23 @@ def test_extra_refund_balance_change_requires_new_authorization():
     tools.cancel_pending_order(**first.arguments)
     tools.db.users["u"].payment_methods["gift_card_1"].balance += 1
     assert guard._check_confirmation(second.name, second.arguments)[0].rule == "transaction_stale"
+
+
+def test_refund_display_distinguishes_original_method_from_selected_method():
+    guard, tools = backend_guard()
+    original_args = {
+        "order_id": "#W1", "item_ids": [], "payment_method_id": "gift_card_1",
+    }
+    display = guard._display("return_delivered_order_items", original_args)
+    assert 'Recorded original payment method IDs' in display
+    assert '["gift_card_1"]' in display
+    assert "selected method is a recorded original payment method" in display
+
+    tools.db.users["u"].payment_methods["gift_card_2"] = GiftCard(
+        source="gift_card", id="gift_card_2", balance=1,
+    )
+    other_args = {**original_args, "payment_method_id": "gift_card_2"}
+    other_display = guard._display("return_delivered_order_items", other_args)
+    assert '"gift_card_2"' in other_display
+    assert '["gift_card_1"]' in other_display
+    assert "selected method is a recorded original payment method" not in other_display

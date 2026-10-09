@@ -148,6 +148,25 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
                                     f"{key} {item_id}: {_attr(product, 'name')} {_json(variant)}"
                                 )
                                 break
+            payment_id = args.get("payment_method_id")
+            if payment_id:
+                user = self._get_user(self._owner_uid(name, args))
+                method = (_attr(user, "payment_methods", {}) or {}).get(payment_id)
+                original_ids = sorted({
+                    _attr(payment, "payment_method_id")
+                    for payment in (_attr(order, "payment_history", []) or [])
+                    if _attr(payment, "transaction_type") == "payment"
+                })
+                details.append(f"Selected payment/refund method: {_json(method)}")
+                details.append(
+                    "Recorded original payment method IDs from this order's "
+                    f"payment transactions: {_json(original_ids)}"
+                )
+                if payment_id in original_ids:
+                    details.append(
+                        "The selected method is a recorded original payment method "
+                        "for this order, not a newly substituted refund destination."
+                    )
         return "\n".join(details)
 
     def render_assistant(self, text: str) -> str:
