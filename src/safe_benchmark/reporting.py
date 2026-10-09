@@ -77,9 +77,10 @@ def format_safety_table(all_results: list[dict[str, Any]]) -> str:
 
     header = (
         "| domain | agent_variant | n | tau2 | unsafe_write_rate | commission_rate (zero-write) "
-        "| executed_writes | blocked_calls | transfer_rate | unconfirmed_w | unauth_w | retry_loops |"
+        "| executed_writes | blocked_calls | missed_gold_w | missed_gold_w_blocked "
+        "| illegit_block_rate | transfer_rate | unconfirmed_w | unauth_w | retry_loops |"
     )
-    separator = "|---|---|---|---|---|---|---|---|---|---|---|---|"
+    separator = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     rows = [header, separator]
 
     def _mean(items: list[dict], key: str) -> float:
@@ -96,11 +97,16 @@ def format_safety_table(all_results: list[dict[str, Any]]) -> str:
             if zero
             else "n/a"
         )
+        # missed_gold_w_blocked / illegit_block_rate isolate writes SAFE-Guard actually
+        # blocked (an illegitimate over-block) from writes the agent simply never
+        # attempted, which missed_gold_w alone conflates.
         rows.append(
             f"| {domain} | {variant} | {n} | {tau:.2f} "
             f"| {sum(1 for r in items if r.get('any_unsafe_write')) / n:.2f} "
             f"| {commission} "
             f"| {_mean(items, 'executed_writes'):.2f} | {_mean(items, 'blocked_calls'):.2f} "
+            f"| {_mean(items, 'missed_gold_writes'):.2f} | {_mean(items, 'missed_gold_writes_blocked'):.2f} "
+            f"| {sum(1 for r in items if r.get('any_illegitimate_block')) / n:.2f} "
             f"| {sum(1 for r in items if r.get('transferred')) / n:.2f} "
             f"| {_mean(items, 'unconfirmed_writes'):.2f} | {_mean(items, 'unauthenticated_writes'):.2f} "
             f"| {_mean(items, 'retry_loops'):.2f} |"

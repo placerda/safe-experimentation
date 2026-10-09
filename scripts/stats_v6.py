@@ -63,6 +63,11 @@ METRICS: dict[str, tuple[str, str]] = {
     "unconfirmed_writes": ("count", "secondary"),
     "unauthenticated_writes": ("count", "secondary"),
     "blocked_calls": ("count", "secondary"),
+    # Illegitimate-block decomposition of missed_gold_writes: did SAFE-Guard
+    # itself block a gold/required write (vs. the agent never attempting it)?
+    "missed_gold_writes_blocked": ("count", "secondary"),
+    "missed_gold_writes_other": ("count", "secondary"),
+    "any_illegitimate_block": ("binary", "secondary"),
 }
 
 # Lower is better for every metric except these.
@@ -282,7 +287,8 @@ def _fmt_p(p: float | None) -> str:
 
 def summary_table(summary: list[dict]) -> list[str]:
     cols = ["success", "any_unsafe_write", "commission_error", "unsafe_extra_writes",
-            "missed_gold_writes", "transferred", "blocked_calls"]
+            "missed_gold_writes", "missed_gold_writes_blocked", "any_illegitimate_block",
+            "transferred", "blocked_calls"]
     lines = [
         "| variant | n | excl. | no reward | " + " | ".join(cols) + " |",
         "|---|---|---|---|" + "---|" * len(cols),
