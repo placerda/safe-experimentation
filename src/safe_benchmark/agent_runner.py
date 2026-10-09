@@ -7,6 +7,7 @@ The user simulator follows the task's user_scenario instructions.
 from __future__ import annotations
 
 import json
+import re
 import os
 import random
 import sys
@@ -56,8 +57,9 @@ class UserSimulatorError(RuntimeError):
 
 def _user_ended_conversation(response: str) -> bool:
     lower = response.lower().replace("\u2019", "'").replace("\u2018", "'")
-    return any(
-        phrase in lower for phrase in ["goodbye", "that's all", "thank you, bye", "nothing else"]
+    return (
+        any(phrase in lower for phrase in ["goodbye", "thank you, bye", "nothing else"])
+        or bool(re.search(r"\bthat's all\b(?!\s+(?:correct|right|accurate)\b)", lower))
     )
 
 

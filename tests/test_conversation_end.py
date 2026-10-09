@@ -20,6 +20,11 @@ def test_recognized_user_end_signals(text):
     "Thanks. One more thing: return the backpack.",
     "Thank you.",
     "Please update my address.",
+    "Yes, that's all correct.",
+    "Yes, that\u2019s all correct.\n1. Change the item to red.\n"
+    "2. Use my default address for that order.",
+    "That's all right, please proceed.",
+    "That is the plan; that's all accurate.",
 ])
 def test_nonterminal_replies_are_not_end_signals(text):
     assert not _user_ended_conversation(text)
