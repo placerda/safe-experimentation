@@ -48,6 +48,56 @@ def _number(value: Any) -> float | None:
     return float(match[0]) if match else None
 
 
+def is_address_source(sentence: str) -> bool:
+    return not re.search(r"\b(?:not|never|wasn't|weren't)\b", sentence, re.I) and bool(
+        re.search(
+            r"\b(?:sent|shipped|delivered)\s+to\s+(?:my|the|our)\s+"
+            r"(?:new|correct)\s+(?:address|place|home|house)\b|"
+            r"\b(?:new|correct)\s+address\s+(?:on|from)\b",
+            sentence, re.I,
+        )
+    )
+
+
+def _return_coverage(order: Any, requests: list[str], names: set[str]) -> set[str]:
+    """Collect recognized return goals before an order-wide irreversible transition."""
+    items = _attr(order, "items", []) or []
+    expected: set[str] = set()
+    for request in requests:
+        for clause in re.split(r"[.!?;\n]+", request.replace("**", "").replace("`", "")):
+            if not re.search(r"\breturn\b", clause, re.I):
+                continue
+            withdrawing = bool(re.search(r"\b(?:don't|do not)\s+return\b", clause, re.I))
+            if not withdrawing and re.search(r"\b(?:not|don't|do not|never)\b", clause, re.I):
+                continue
+            order_ids = re.findall(r"#?W\d+", clause, re.I)
+            if order_ids and _norm(_attr(order, "order_id")) not in {
+                _norm(order_id) for order_id in order_ids
+            }:
+                continue
+            mentioned_ids = {
+                _norm(_attr(item, "item_id")) for item in items
+                if re.search(rf"(?<!\w){re.escape(str(_attr(item, 'item_id')))}(?!\w)", clause)
+            }
+            if mentioned_ids:
+                if withdrawing:
+                    expected.difference_update(mentioned_ids)
+                else:
+                    expected.update(mentioned_ids)
+                continue
+            for item in items:
+                name = str(_attr(item, "name", ""))
+                # Singular/plural variants only; do not equate arbitrary substrings.
+                singular = re.sub(r"\bbookshelves\b", "bookshelf", clause, flags=re.I)
+                singular = re.sub(r"\b([a-z]+)s\b", r"\1", singular, flags=re.I)
+                if _mentions(name, singular, names):
+                    if withdrawing:
+                        expected.discard(_norm(_attr(item, "item_id")))
+                    else:
+                        expected.add(_norm(_attr(item, "item_id")))
+    return expected
+
+
 def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list[Violation]:
     """Check only recognized relations; unsupported intent has no guarantee."""
     text = "\n".join(requests)
@@ -85,23 +135,24 @@ def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list
         # Resolve "new address on the <named product> order", not "old profile
         # address". More than one matching address is an ambiguity, not evidence.
         sources = []
+        recognized_source = False
         for sentence in re.split(r"[.!?\n]+", text):
-            if re.search(r"\b(?:not|never|wasn't|weren't)\b", sentence, re.I):
+            if not is_address_source(sentence):
                 continue
-            if not re.search(r"\b(?:new|correct)\b.*\baddress\b", sentence, re.I):
-                continue
-            if not re.search(
-                r"\b(?:sent|shipped|delivered)\s+to\s+(?:my|the|our)\s+(?:new|correct)\s+address\b|"
-                r"\b(?:new|correct)\s+address\s+(?:on|from)\b",
-                sentence, re.I,
-            ):
-                continue
+            recognized_source = True
             for order in orders:
                 if any(_mentions(str(_attr(item, "name", "")), sentence, names)
                        for item in _attr(order, "items", []) or []):
                     sources.append((_norm(_attr(order, "order_id")), _addr_key(_attr(order, "address"))))
         addresses = {address for _, address in sources if address is not None}
-        if sources and len(addresses) != 1:
+        if recognized_source and not sources:
+            out.append(Violation(
+                "A", "intent_source_unresolved",
+                "The independent request identifies a new-address order source, "
+                "but no retrieved order resolves it. Retrieve the source or ask "
+                "for an explicit address correction before preparing a write.",
+            ))
+        elif sources and len(addresses) != 1:
             out.append(Violation(
                 "A", "intent_ambiguous",
                 "The original request's address source resolves to different addresses. "
@@ -114,6 +165,18 @@ def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list
                 f"source (retrieved order(s): {', '.join(sorted({oid for oid, _ in sources}))}). "
                 "Use that source's address or obtain an explicit correction of the intent, "
                 "not another yes to the same inconsistent summary.",
+            ))
+    if name == "return_delivered_order_items":
+        order = guard._get("orders", args.get("order_id"))
+        expected = _return_coverage(order, requests, names)
+        supplied = {_norm(item_id) for item_id in args.get("item_ids", [])}
+        if expected - supplied:
+            out.append(Violation(
+                "A", "intent_return_coverage",
+                "Returning a subset changes the whole order to return requested and "
+                "prevents later returns through this tool. Include all recognized "
+                f"requested items in this order: missing {sorted(expected - supplied)}. "
+                "Ask for an explicit correction if the user wants to withdraw an item.",
             ))
     if name not in ("exchange_delivered_order_items", "modify_pending_order_items"):
         return out

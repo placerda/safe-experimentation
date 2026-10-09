@@ -18,7 +18,7 @@ from safe_benchmark.enforcers import Decision, GuardrailEvent
 from safe_benchmark.enforcers.safeguard import (
     SafeGuardEnforcer, Violation, WRITE_TOOLS, _attr, _norm, is_affirmative,
 )
-from safe_benchmark.enforcers.intent import check_intent
+from safe_benchmark.enforcers.intent import check_intent, is_address_source
 
 _CONFIRM = re.compile(
     r"\s*(?:yes|yeah|yep|confirmed|i confirm|approved|i approve|go ahead|"
@@ -148,6 +148,7 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
                     sentence for request in auth.independent_requests
                     for sentence in re.split(r"[.!?\n]+", request)
                     if sentence.strip() and not re.search(r"\baddress\b", sentence, re.I)
+                    and not is_address_source(sentence)
                 ]
             auth.independent_requests.append(text)
         auth.approved = []

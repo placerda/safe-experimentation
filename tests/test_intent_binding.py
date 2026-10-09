@@ -69,8 +69,10 @@ def test_rejecting_cheapest_does_not_create_cheapest_requirement():
 def test_unretrieved_order_cannot_supply_source_evidence():
     g, old, _ = setup()
     g.state.retrieved["order"] = {"w2"}
-    assert not rules(g, "modify_user_address", {**old, "user_id": "u"},
-                     "The luggage set was sent to my new address.")
+    assert "intent_source_unresolved" in rules(
+        g, "modify_user_address", {**old, "user_id": "u"},
+        "The luggage set was sent to my new address.",
+    )
 
 
 def test_conflicting_sources_require_clarification():
@@ -230,4 +232,85 @@ def test_unavailable_peer_requires_clarification_not_catalog_substitution():
     assert "intent_candidate_set" in rules(
         g, "modify_pending_order_items", args,
         "Replace the camera with the cheapest camera from that order.",
+    )
+
+
+def test_return_batches_include_other_requested_product_in_same_order():
+    g, _, _ = setup()
+    args = dict(order_id="#W2", item_ids=["item_b"])
+    assert "intent_return_coverage" in rules(
+        g, "return_delivered_order_items", args,
+        "I want to return the cameras. Also I want to return the bicycle.",
+    )
+    args["item_ids"] = ["item_b", "item_c"]
+    assert "intent_return_coverage" not in rules(
+        g, "return_delivered_order_items", args,
+        "I want to return the cameras. Also I want to return the bicycle.",
+    )
+
+
+def test_explicit_return_ids_union_across_separate_requested_calls():
+    g, _, _ = setup()
+    assert "intent_return_coverage" in rules(
+        g, "return_delivered_order_items", dict(order_id="#W2", item_ids=["item_b"]),
+        "Return item_b from #W2.\nReturn item_c from #W2, one at a time.",
+    )
+
+
+def test_return_other_order_and_negation_do_not_add_coverage():
+    g, _, _ = setup()
+    assert "intent_return_coverage" not in rules(
+        g, "return_delivered_order_items", dict(order_id="#W2", item_ids=["item_b"]),
+        "Return the camera. Do not return the bicycle. Return item_c from #W1.",
+    )
+
+
+def test_purchase_mention_does_not_establish_return_goal():
+    g, _, _ = setup()
+    assert "intent_return_coverage" not in rules(
+        g, "return_delivered_order_items", dict(order_id="#W2", item_ids=["item_b"]),
+        "I bought a bicycle. I want to return the camera.",
+    )
+
+
+def test_address_source_recognizes_new_place_not_only_literal_address():
+    g, old, new = setup()
+    text = "I bought a luggage set that was sent to my new place. Update my default address."
+    assert "intent_address_source" in rules(
+        g, "modify_user_address", {**old, "user_id": "u"}, text,
+    )
+    assert not rules(g, "modify_user_address", {**new, "user_id": "u"}, text)
+
+
+def test_address_negation_and_old_home_do_not_establish_new_source():
+    g, old, _ = setup()
+    for text in (
+        "The luggage set was not sent to my new home.",
+        "The luggage set was sent to my old house. Update my default address.",
+    ):
+        assert not rules(g, "modify_user_address", {**old, "user_id": "u"}, text)
+
+
+def test_explicit_return_withdrawal_revises_coverage():
+    g, _, _ = setup()
+    requests = [
+        "Return the camera and bicycle.",
+        "Actually do not return item_c from #W2.",
+    ]
+    assert "intent_return_coverage" not in {
+        v.rule for v in check_intent(
+            g, "return_delivered_order_items",
+            dict(order_id="#W2", item_ids=["item_b"]), requests,
+        )
+    }
+
+
+def test_explicit_address_correction_replaces_new_place_reference():
+    g, old, _ = setup()
+    g.pre_user_turn("The luggage set was sent to my new place. Return the camera.", None, 0)
+    g.pre_user_turn("Actually use 1 Old Road as my account address instead.", None, 1)
+    assert "Return the camera" in "\n".join(g.authorization.independent_requests)
+    assert not check_intent(
+        g, "modify_user_address", {**old, "user_id": "u"},
+        g.authorization.independent_requests,
     )
