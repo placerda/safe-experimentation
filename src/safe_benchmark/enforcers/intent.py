@@ -64,9 +64,15 @@ def _return_coverage(order: Any, requests: list[str], names: set[str]) -> set[st
     items = _attr(order, "items", []) or []
     expected: set[str] = set()
     for request in requests:
+        request = request.replace("**", "").replace("`", "")
+        request = re.sub(
+            r"(\breturn\s+only\s*:\s*)\n((?:[ \t]*-\s+[^\n]+(?:\n|$))+)",
+            lambda match: match[1] + " ".join(match[2].splitlines()),
+            request, flags=re.I,
+        )
         for clause in re.split(
             r"[.!?;\n]+|\band\s+(?=(?:I\s+(?:want\s+to\s+)?)?return\b)",
-            request.replace("**", "").replace("`", ""), flags=re.I,
+            request, flags=re.I,
         ):
             if not re.search(r"\breturn\b", clause, re.I):
                 continue
@@ -106,6 +112,27 @@ def _return_coverage(order: Any, requests: list[str], names: set[str]) -> set[st
                 singular = re.sub(r"\b([a-z]+)s\b", r"\1", singular, flags=re.I)
                 if _mentions(name, singular, names):
                     matched.add(_norm(_attr(item, "item_id")))
+            # Do not turn an unresolved singular reference into every variant.
+            grouped: dict[str, list[Any]] = {}
+            for item in items:
+                if _norm(_attr(item, "item_id")) in matched:
+                    grouped.setdefault(str(_attr(item, "product_id")), []).append(item)
+            resolved: set[str] = set()
+            for group in grouped.values():
+                if len(group) == 1 or re.search(r"\b(?:all|both)\b", target_clause, re.I):
+                    resolved.update(_norm(_attr(item, "item_id")) for item in group)
+                    continue
+                option_matches = [
+                    item for item in group
+                    if any(
+                        _tokens(str(value)) <= _tokens(target_clause)
+                        for value in (_attr(item, "options", {}) or {}).values()
+                        if _tokens(str(value)) and str(value).lower() not in ("yes", "no")
+                    )
+                ]
+                if len(option_matches) == 1:
+                    resolved.add(_norm(_attr(option_matches[0], "item_id")))
+            matched = resolved
             if withdrawing:
                 expected.difference_update(matched)
             elif exclusive and matched:
@@ -241,6 +268,26 @@ def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list
             r"\b(?:not|don't|do not)\b[^.!?\n]{0,30}\bcheapest\b", request,
         ):
             candidates = available
+            colors = {
+                str((_attr(value, "options", {}) or {}).get("color", "")).lower()
+                for value in variants.values()
+            } - {""}
+            requested_colors = {
+                color for color in colors if re.search(
+                    rf"\bcheapest\s+(?:available\s+)?{re.escape(color)}\b", request,
+                )
+            }
+            if len(requested_colors) == 1:
+                color = next(iter(requested_colors))
+                candidates = [
+                    value for value in candidates
+                    if str((_attr(value, "options", {}) or {}).get("color", "")).lower() == color
+                ]
+                if str(options.get("color", "")).lower() != color:
+                    out.append(Violation(
+                        "A", "intent_option_constraint",
+                        "The cheapest replacement must satisfy the recognized color requirement.",
+                    ))
             order_scoped = re.search(
                 r"\b(?:from|among|in|of)\b[^.!?\n]{0,60}"
                 r"\b(?:same|this|that)\s+(?:same\s+)?order\b", request,
@@ -253,7 +300,8 @@ def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list
                 }
                 candidates = [value for item_id, value in variants.items()
                               if _norm(item_id) in peer_ids
-                              and _attr(value, "available", False)]
+                              and _attr(value, "available", False)
+                              and value in candidates]
                 if not candidates or _norm(new_id) not in peer_ids:
                     out.append(Violation(
                         "A", "intent_candidate_set",

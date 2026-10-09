@@ -237,6 +237,9 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
                        "the trusted manifest and obtain a new user confirmation. "
                        "Do not retry writes before the user responds.",
             ), events
+        if decision.action == "allow":
+            # Spend at the dispatch gate: backend/observer failures cannot replay it.
+            self.authorization.approved.pop(0)
         return decision, events
 
     def post_tool_call(self, tool_call, result, task, turn):
@@ -244,13 +247,4 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
         if tool_call.name == "transfer_to_human_agents":
             self.authorization = AuthorizationState()
             return events
-        if tool_call.name in WRITE_TOOLS.get(self.state.domain, ()):
-            # Consume even on tool error: a retry requires renewed authorization.
-            auth = self.authorization
-            if auth.approved and auth.approved[0].signature == self._signature(
-                tool_call.name, tool_call.arguments or {}
-            ):
-                auth.approved.pop(0)
-            else:
-                auth.approved = []
         return events
