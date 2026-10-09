@@ -208,7 +208,12 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
             r"\b(?:actually|instead|changed my mind|correction|i meant|"
             r"return\s+only|do not\s+return|don't\s+return)\b", text, re.I,
         ))
-        if not is_affirmative(text) or correction:
+        instruction = bool(re.search(
+            r"\b(?:i\s+(?:want|(?:still\s+)?need)\b|"
+            r"please\s+(?:also\s+)?(?:change|update|modify|return|cancel|exchange)\b)",
+            text, re.I,
+        ))
+        if not is_affirmative(text) or correction or instruction:
             if correction and re.search(r"\baddress\b", text, re.I):
                 auth.independent_requests = [
                     sentence for request in auth.independent_requests

@@ -33,3 +33,23 @@ non-gold-write outcomes, actual write sequence and any remaining blocks;
 do not use a selected recovery to replace the 34-pair comparison.
 
 Run: `outputs/runs/transaction-address-obligation-regression/`.
+
+## First frozen selected result: `4be002b`
+
+Integrity: 72 source hashes, two exact result/trace cells, no execution errors.
+retail_111 achieved full reward with zero effective non-gold writes; the address
+preceded laptop modification, with separate renewed authorization for the watch
+after an unsupported item-refund effect changed the expected user state.
+retail_104 remained unsuccessful with zero effective non-gold writes. Both
+returns executed, but the item action still preceded the address. Repeated
+farewells exhausted the budget. Neither result is retried or reclassified.
+
+Inspection identified a remaining ledger gap: affirmative messages containing
+new explicit instructions without a correction keyword were excluded. The next
+source retains recognized first-person wants/needs and explicit "please
+change/update/modify/return/cancel/exchange" instructions as request evidence,
+never as manifest approval. It also links "the/that order address" within the
+same message's generic pending-order request only when there is one retrieved
+owned pending order and no explicit competing order ID. Plain summary agreement
+still does not enter the independent request ledger. These additional repairs
+are not part of the first frozen result.

@@ -98,3 +98,28 @@ def test_policy_entry_point_blocks_only_item_mutation_not_exchange():
             guard, "exchange_delivered_order_items", args, [request],
         )
     }
+
+
+def test_multiline_same_message_pending_address_obligation_survives_yes():
+    guard, tools, order = setup()
+    tools.db.orders["#W2"].status = "cancelled"
+    request = (
+        "Yes, please return the backpack only.\n"
+        "Also I still need:\n- change my pending order item to red\n"
+        "- change the order address to my default Chicago home in my profile"
+    )
+    guard.pre_user_turn(request, None, 1)
+    assert request in guard.authorization.independent_requests
+    assert not guard.authorization.approved
+    assert rules(guard, tools, order, guard.authorization.independent_requests) == {
+        "address_prerequisite",
+    }
+
+
+def test_unrelated_explicit_order_does_not_bind_generic_address_clause():
+    guard, tools, order = setup()
+    tools.db.orders["#W2"].status = "cancelled"
+    assert not rules(guard, tools, order, [
+        "Change my pending order item to red. "
+        "For #W2 change the order address to my default address.",
+    ])

@@ -68,6 +68,22 @@ def test_explicit_return_only_correction_survives_affirmative_in_other_clause():
     assert not guard.authorization.approved
 
 
+def test_plain_summary_agreement_still_is_not_independent_intent():
+    guard, _ = synthetic_guard()
+    original = list(guard.authorization.independent_requests)
+    guard.pre_user_turn("Yes, that is correct. Everything looks good.", None, 1)
+    assert guard.authorization.independent_requests == original
+    assert not guard.authorization.approved
+
+
+def test_explicit_affirmative_address_instruction_is_not_manifest_approval():
+    guard, _ = synthetic_guard()
+    request = "And yes, please also update the shipping address on #W9 to my default address."
+    guard.pre_user_turn(request, None, 1)
+    assert request in guard.authorization.independent_requests
+    assert not guard.authorization.approved
+
+
 def color_guard():
     guard, _, _ = setup()
     guard.state.db.products["product_b"]["variants"] = {

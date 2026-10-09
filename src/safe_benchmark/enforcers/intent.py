@@ -152,8 +152,9 @@ def _address_prerequisite(
     item_names = {str(_attr(item, "name", "")) for item in _attr(order, "items", []) or []}
     requested = False
     addresses: set[Any] = set()
-    for request in (
-        clause for message in requests for clause in re.split(r"[.!?\n]+", message)
+    for message, request in (
+        (message, clause) for message in requests
+        for clause in re.split(r"[.!?\n]+", message)
     ):
         if not re.search(r"\baddress\b", request, re.I):
             continue
@@ -165,7 +166,14 @@ def _address_prerequisite(
             ))
             or any(_mentions(name, normalized, names) for name in item_names if name)
             or (
-                bool(re.search(r"\bpending order\b", normalized))
+                (
+                    bool(re.search(r"\bpending order\b", normalized))
+                    or (
+                        bool(re.search(r"\b(?:the|that) order\b", normalized))
+                        and bool(re.search(r"\bpending order\b", message, re.I))
+                        and not re.search(r"#\w+", message)
+                    )
+                )
                 and len([candidate for candidate in owned
                          if _attr(candidate, "status") == "pending"]) == 1
             )
