@@ -1,6 +1,7 @@
 """Synthetic cases for ambiguous products and constrained optimization."""
 
 from safe_benchmark.enforcers.intent import _return_coverage, check_intent
+from tests.test_authorization_sequences import synthetic_guard
 from tests.test_intent_binding import setup
 
 
@@ -45,6 +46,26 @@ def test_option_withdrawal_does_not_withdraw_other_variant():
     assert coverage(
         "Return both vacuum cleaners.", "Do not return the robotic vacuum cleaner.",
     ) == {"canister"}
+
+
+def test_received_with_reference_does_not_add_a_return_goal():
+    assert coverage("Return the air purifier I received with the robotic vacuum cleaner.") == {
+        "purifier",
+    }
+
+
+def test_explicit_return_only_correction_survives_affirmative_in_other_clause():
+    guard, _ = synthetic_guard()
+    correction = (
+        "For #W9, I want to return only the air purifier, item purifier. "
+        "And yes, please also change the address."
+    )
+    guard.pre_user_turn(correction, None, 1)
+    assert correction in guard.authorization.independent_requests
+    assert coverage("Return both vacuum cleaners and the air purifier.", correction) == {
+        "purifier",
+    }
+    assert not guard.authorization.approved
 
 
 def color_guard():

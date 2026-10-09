@@ -205,7 +205,8 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
         auth = self.authorization
         text = user_msg or ""
         correction = bool(re.search(
-            r"\b(?:actually|instead|changed my mind|correction|i meant)\b", text, re.I
+            r"\b(?:actually|instead|changed my mind|correction|i meant|"
+            r"return\s+only|do not\s+return|don't\s+return)\b", text, re.I,
         ))
         if not is_affirmative(text) or correction:
             if correction and re.search(r"\baddress\b", text, re.I):

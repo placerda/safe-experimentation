@@ -86,7 +86,8 @@ def _return_coverage(order: Any, requests: list[str], names: set[str]) -> set[st
                 continue
             # A co-delivery reference identifies the target; it is not another goal.
             target_clause = re.split(
-                r"\b(?:that|which)\s+(?:came|arrived|was delivered)\s+with\b",
+                r"\b(?:(?:that|which)\s+(?:came|arrived|was delivered)|"
+                r"(?:that\s+)?I\s+(?:received|got))\s+with\b",
                 clause, maxsplit=1, flags=re.I,
             )[0]
             exclusive = bool(re.search(r"\breturn\s+only\b", target_clause, re.I))
@@ -140,6 +141,93 @@ def _return_coverage(order: Any, requests: list[str], names: set[str]) -> set[st
             else:
                 expected.update(matched)
     return expected
+
+
+def _address_prerequisite(
+    guard: Any, order: Any, orders: list[Any], requests: list[str], names: set[str],
+) -> list[Violation]:
+    """Preserve a recognized address goal before a one-time item mutation."""
+    owner = _attr(order, "user_id")
+    owned = [candidate for candidate in orders if _attr(candidate, "user_id") == owner]
+    item_names = {str(_attr(item, "name", "")) for item in _attr(order, "items", []) or []}
+    requested = False
+    addresses: set[Any] = set()
+    for request in (
+        clause for message in requests for clause in re.split(r"[.!?\n]+", message)
+    ):
+        if not re.search(r"\baddress\b", request, re.I):
+            continue
+        normalized = request.replace("**", "").replace("`", "").lower()
+        mentions_target = (
+            bool(re.search(
+                rf"(?<!\w){re.escape(str(_attr(order, 'order_id')).lower())}(?!\w)",
+                normalized,
+            ))
+            or any(_mentions(name, normalized, names) for name in item_names if name)
+            or (
+                bool(re.search(r"\bpending order\b", normalized))
+                and len([candidate for candidate in owned
+                         if _attr(candidate, "status") == "pending"]) == 1
+            )
+        )
+        if not mentions_target:
+            continue
+        if re.search(
+            r"\b(?:do not|don't)\s+(?:change|update|modify)\s+"
+            r"(?:the\s+)?(?:shipping\s+)?address\b", normalized,
+        ):
+            requested, addresses = False, set()
+            continue
+        # Do not treat descriptions of an existing address as an update goal.
+        if not re.search(r"\b(?:change|update|modify)\b", normalized):
+            continue
+        if not re.search(
+            r"\b(?:default|profile)\b[^.!?\n]*\baddress\b|"
+            r"\baddress\b[^.!?\n]*\b(?:default|profile)\b|\bnyc address\b",
+            normalized,
+        ):
+            continue
+        requested = True
+        addresses = set()
+        if re.search(r"\bdefault\b|\bprofile address\b", normalized):
+            address = _addr_key(_attr(guard._get_user(owner), "address"))
+            if address is not None:
+                addresses.add(address)
+        elif re.search(r"\bnyc address\b", normalized):
+            addresses = {
+                address for candidate in owned
+                if _norm(_attr(_attr(candidate, "address"), "city")) == "new york"
+                and (address := _addr_key(_attr(candidate, "address"))) is not None
+            }
+    if not requested:
+        return []
+    if len(addresses) != 1:
+        return [Violation(
+            "F", "address_prerequisite_unresolved",
+            "The recognized requested address must be resolved before this one-time "
+            "item change closes further order modification. Retrieve the source or "
+            "ask for an explicit address correction; do not modify items first.",
+        )]
+    if _addr_key(_attr(order, "address")) in addresses:
+        return []
+    # Staging can use an earlier listed address action; dispatch still checks
+    # actual state and ordered authorization before executing the item change.
+    authorization = getattr(guard, "authorization", None)
+    if authorization is not None:
+        staged = [
+            entry for entry in authorization.pending
+            if entry.tool == "modify_pending_order_address"
+            and _norm(entry.arguments.get("order_id")) == _norm(_attr(order, "order_id"))
+        ]
+        if staged and _addr_key(staged[-1].arguments) in addresses:
+            return []
+    return [Violation(
+        "F", "address_prerequisite",
+        "The independent request also asks for an address update on this order. "
+        "Its one-time item modification would prevent that update. Prepare the "
+        "resolved requested address change first, then the item change; never "
+        "execute item modification while the recognized address goal is unmet.",
+    )]
 
 
 def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list[Violation]:
@@ -225,6 +313,8 @@ def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list
     if name not in ("exchange_delivered_order_items", "modify_pending_order_items"):
         return out
     order = guard._get("orders", args.get("order_id"))
+    if name == "modify_pending_order_items":
+        out.extend(_address_prerequisite(guard, order, orders, requests, names))
     items = _attr(order, "items", []) or []
     item_names = {str(_attr(item, "name", "")) for item in items}
     # Only a clear collective request binds set completeness. A single named

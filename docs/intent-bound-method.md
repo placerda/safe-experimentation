@@ -107,6 +107,22 @@ Unsupported syntax and ambiguous product subsets remain limitations.
 Coverage is checked for the proposed target order; it is not a proof of
 completeness for every future user request.
 
+### Address obligation before a one-time item mutation
+
+A bounded Flow predicate recognizes an address-update clause attached to an
+explicit order ID, a matching product reference, or a unique retrieved pending
+order. It resolves default/profile destinations through that user's current
+profile; an explicit NYC reference resolves only to a unique address on retrieved
+owned New York orders. Unresolved sources require clarification.
+
+Before pending-order item mutation closes further modification, the recognized
+address must already match or be an earlier correctly targeted prepared action.
+Ordered dispatch and expected-state checks still require its actual execution
+before the item write. The rule does not reorder arguments, mutate the address
+itself or accept arbitrary post-hoc state. Explicit scoped withdrawal removes
+the obligation. Unsupported address destinations and linguistic target links
+are not a general prerequisite planner.
+
 ### Source and destination roles
 
 Recognized descriptions such as a named product being shipped to the user's
