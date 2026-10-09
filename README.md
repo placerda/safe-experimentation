@@ -85,7 +85,7 @@ conditional guarantees, limitations and the retained v6 retail regression.
 ```powershell
 python scripts\run_experiment.py --config configs\experiment.transaction.yaml `
   --tasks-dir data\heldout2\selected_tasks --annotations-dir data\heldout2\annotations `
-  --seeds 0,1,2 --workers 4
+  --seeds 0,1,2 --workers 2
 ```
 
 Offline diagnostics replay every originally executed call, even when a
@@ -99,3 +99,18 @@ python scripts\shadow_replay.py outputs\runs\20261008_180726__v6-heldout `
 Replay cannot estimate live-agent success or safety after changed feedback.
 Previously inspected held-out tasks are calibration data for subsequent
 versions, not untouched confirmatory evidence.
+
+Report confirmation overhead separately from ordinary policy/intervention
+blocks. Preparations block execution by design and are not themselves unsafe
+actions. These descriptive counts do not establish informed consent or a
+causal effect on task success:
+
+```powershell
+python scripts\report_transaction_overhead.py outputs\runs\transaction-heldout2 `
+  --out outputs\runs\transaction-heldout2-analysis
+```
+
+For the frozen prospective run, `freeze.json` preserves the original setup;
+`infrastructure-amendment.json` records the reduction from eight workers to
+two after Azure token-rate-limit errors. Successful traces are preserved on
+resume; infrastructure-error retries are disclosed.
