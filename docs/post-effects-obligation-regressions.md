@@ -53,3 +53,13 @@ same message's generic pending-order request only when there is one retrieved
 owned pending order and no explicit competing order ID. Plain summary agreement
 still does not enter the independent request ledger. These additional repairs
 are not part of the first frozen result.
+
+## Follow-up development check fixed before execution
+
+Run `transaction-affirmative-obligation-regression` uses the newly committed
+ledger/target-link repairs, again retail_104 and retail_111, treatment only,
+seed index 0, two workers and the unchanged 20-turn budget/deployment. This
+is a distinct versioned development check, not a retry or replacement of
+the valid `4be002b` failures. The primary diagnostic is whether explicit
+mixed-affirmative address goals constrain write ordering. Full rewards,
+non-gold writes and any closure exhaustion are retained regardless of outcome.
