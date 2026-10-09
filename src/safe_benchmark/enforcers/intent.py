@@ -238,6 +238,65 @@ def _address_prerequisite(
     )]
 
 
+def _color_only_goal(
+    order: Any, item: Any, orders: list[Any], requests: list[str],
+    names: set[str], variants: dict,
+) -> str | None:
+    colors = {
+        str((_attr(value, "options", {}) or {}).get("color", "")).lower()
+        for value in variants.values()
+    } - {""}
+    owner = _attr(order, "user_id")
+    unique_pending = sum(
+        _attr(candidate, "user_id") == owner and _attr(candidate, "status") == "pending"
+        for candidate in orders
+    ) == 1
+    goal = None
+    for message in requests:
+        for clause in re.split(r"[.!?;\n]+", message):
+            clause = clause.replace("**", "").replace("`", "").lower()
+            ids = re.findall(r"#w\d+", clause)
+            if ids and str(_attr(order, "order_id")).lower() not in ids:
+                continue
+            targeted = (
+                _mentions(str(_attr(item, "name", "")), clause, names)
+                or str(_attr(order, "order_id")).lower() in clause
+                or (unique_pending and "pending order item" in clause)
+            )
+            if not targeted or not re.search(r"\b(?:change|modify|switch)\b", clause):
+                continue
+            if re.search(r"\b(?:not|don't|do not|cheapest|cheaper|configuration)\b", clause):
+                goal = None
+                continue
+            requested = [
+                color for color in colors
+                if re.search(rf"\bto\s+{re.escape(color)}\b", clause)
+            ]
+            if len(requested) != 1:
+                continue
+            # This predicate covers a color edit, not general variant selection.
+            other_options = {
+                key: value for key, value in (_attr(item, "options", {}) or {}).items()
+                if key != "color"
+            }
+            if any(
+                _tokens(key) <= _tokens(clause)
+                or any(
+                    _tokens(str(candidate_value))
+                    and _tokens(str(candidate_value)) <= _tokens(clause)
+                    for candidate in variants.values()
+                    for candidate_value in [
+                        (_attr(candidate, "options", {}) or {}).get(key, value)
+                    ]
+                )
+                for key, value in other_options.items()
+            ):
+                goal = None
+                continue
+            goal = requested[0]
+    return goal
+
+
 def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list[Violation]:
     """Check only recognized relations; unsupported intent has no guarantee."""
     text = "\n".join(requests)
@@ -347,11 +406,6 @@ def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list
     old_items, _ = guard._match_items(order, list(args.get("item_ids") or []))
     for old, new_id in zip(old_items, args.get("new_item_ids") or []):
         product_name = str(_attr(old, "name", ""))
-        clauses = [clause for clause in re.split(r"[!?\n]+", text)
-                   if _mentions(product_name, clause, item_names)]
-        if not clauses:
-            continue
-        request = " ".join(clauses).lower()
         product = guard._get("products", _attr(old, "product_id"))
         variants = _attr(product, "variants", {}) or {}
         variant = variants.get(str(new_id))
@@ -359,6 +413,24 @@ def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list
             continue  # The independent scope rule rejects unknown variants.
         options = _attr(variant, "options", {}) or {}
         original_options = _attr(old, "options", {}) or {}
+        color = _color_only_goal(order, old, orders, requests, names, variants)
+        if color is not None:
+            changed = sorted(
+                key for key in original_options.keys() | options.keys()
+                if key != "color" and original_options.get(key) != options.get(key)
+            )
+            if str(options.get("color", "")).lower() != color or changed:
+                out.append(Violation(
+                    "A", "intent_color_edit",
+                    f"The recognized color-only edit requires {color!r} and preserves "
+                    f"the other item options; unrelated changes: {changed}. Select an "
+                    "available matching variant or ask for an explicit scope change.",
+                ))
+        clauses = [clause for clause in re.split(r"[!?\n]+", text)
+                   if _mentions(product_name, clause, item_names)]
+        if not clauses:
+            continue
+        request = " ".join(clauses).lower()
         price = _to_float(_attr(variant, "price"))
         old_price = _to_float(_attr(old, "price"))
         available = [value for value in variants.values() if _attr(value, "available", False)]

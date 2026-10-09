@@ -125,6 +125,14 @@ are not a general prerequisite planner.
 
 ### Source and destination roles
 
+A recognized color-only edit also preserves the retrieved item's other option
+values. It applies to an explicit product/order reference or a unique retrieved
+owned pending-order item reference, not a cheapest-variant optimization or a
+recognized multi-option revision. A simple manifest approval cannot widen
+that scope. If no available variant meets the edit, the agent must clarify an
+explicit scope change rather than silently substitute unrelated attributes.
+This bounded lexical predicate is not a general natural-language frame rule.
+
 Recognized descriptions such as a named product being shipped to the user's
 new address/place/home resolve to retrieved orders and their addresses.
 Unresolved or conflicting recognized sources block. Address writes must
