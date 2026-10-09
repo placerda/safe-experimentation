@@ -81,6 +81,49 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
         }
         return _json(state)
 
+    def _prepared_snapshot(self, name: str, args: dict) -> str:
+        """Bind to predicted earlier listed effects, never to unobserved writes."""
+        snapshot = json.loads(self._snapshot(name, args))
+        if self.state.domain != "retail":
+            return _json(snapshot)
+        owner = self._owner_uid(name, args)
+        orders = {}
+        if snapshot["target"] is not None:
+            orders[snapshot["target"]["order_id"]] = snapshot["target"]
+        address_fields = ("address1", "address2", "city", "state", "country", "zip")
+        for earlier in self.authorization.pending:
+            previous = earlier.arguments
+            if earlier.tool == "modify_user_address":
+                if previous["user_id"] == owner:
+                    snapshot["user"]["address"] = {
+                        key: previous[key] for key in address_fields
+                    }
+            elif earlier.tool in ("modify_pending_order_address", "cancel_pending_order"):
+                order_id = previous["order_id"]
+                if order_id not in orders:
+                    order = self._get("orders", order_id)
+                    orders[order_id] = json.loads(_json(order))
+                order = orders[order_id]
+                if earlier.tool == "modify_pending_order_address":
+                    order["address"] = {key: previous[key] for key in address_fields}
+                elif order["status"] == "pending":
+                    if order["user_id"] == owner:
+                        for payment in order["payment_history"]:
+                            method = snapshot["user"]["payment_methods"][
+                                payment["payment_method_id"]
+                            ]
+                            if method["source"] == "gift_card":
+                                method["balance"] = round(
+                                    method["balance"] + payment["amount"], 2,
+                                )
+                    order["status"] = "cancelled"
+                    order["cancel_reason"] = previous["reason"]
+                    order["payment_history"].extend([
+                        {**payment, "transaction_type": "refund"}
+                        for payment in order["payment_history"]
+                    ])
+        return _json(snapshot)
+
     def _display(self, name: str, args: dict) -> str:
         # Include complete arguments, and resolve identifiers from live state.
         details = [f"Action: {name}", f"Exact arguments: {_json(args)}"]
@@ -220,10 +263,18 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
             args = json.loads(_json(tool_call.arguments or {}))
             signature = self._signature(tool_call.name, args)
             if not any(action.signature == signature for action in auth.pending):
+                expected_state = self._prepared_snapshot(tool_call.name, args)
+                display = self._display(tool_call.name, args)
+                if expected_state != self._snapshot(tool_call.name, args):
+                    display += (
+                        "\nExpected state includes the effects of earlier listed "
+                        "address/cancellation actions. This action executes only "
+                        "if those effects occur exactly; any other relevant change "
+                        "requires a new manifest."
+                    )
                 auth.pending.append(PreparedAction(
                     tool=tool_call.name, arguments=args, signature=signature,
-                    expected_state=self._snapshot(tool_call.name, args),
-                    display=self._display(tool_call.name, args),
+                    expected_state=expected_state, display=display,
                 ))
             auth.presented_digest = None
             events.append(GuardrailEvent(

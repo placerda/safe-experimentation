@@ -64,9 +64,15 @@ system state.
 | Commit | Proposed action matches next approved signature and current relevant snapshot; policy/intent checks still pass | Consume the next approval at the validated dispatch gate, before invoking the environment. Backend/observer failure cannot restore it. |
 | Refresh | Arguments or relevant state changed | Require a new prepared display and approval; never silently change approved values. |
 
-Ready independent actions may be staged in one tool-call message, giving one
-trusted confirmation. This is not dependency planning: an earlier write may
-invalidate a later snapshot. That later write requires renewed approval.
+Ready actions may be staged in one ordered tool-call message, giving one
+trusted confirmation. Preparation binds later snapshots to exactly predicted
+effects for two locally modeled retail operations: address replacement and
+pending-order cancellation (including rounded gift-card refunds). Prediction
+works on copies, never performs writes, and is included in the signed manifest.
+The dispatch gate still compares the complete relevant live user/target snapshot
+with that expected state. Missing effects, additional changes and wrong values
+require renewed approval. Other transitions are not predicted and may stale
+later actions. This is a bounded transition model, not general dependency planning.
 Preparation-only blocks do not count toward the policy retry circuit breaker.
 
 ## Recognized relational predicates
@@ -146,7 +152,7 @@ machine-checked verification or a theorem of user-intent correctness.
 - Informed consent by an inattentive user or imperfect simulator.
 - Backend atomicity, rollback or protection against concurrent state changes
   between the snapshot check and the backend write.
-- A complete dependency planner or optimum confirmation schedule.
+- A complete transition model, dependency planner or optimum confirmation schedule.
 - A proof that task success cannot decrease.
 - Novelty of reference monitoring, state-dependent policies, human approval,
   complete parameter displays or one-use execution permissions individually.
