@@ -133,6 +133,14 @@ _COMPENSATION_REQUEST_RE = re.compile(
     r"make (?:it|this) up|make up for|goodwill|gesture)\b",
     re.IGNORECASE,
 )
+ADDRESS_FIELDS = ("address1", "address2", "city", "state", "country", "zip")
+# Generic address words that do not identify a specific address.
+_ADDR_STOPWORDS = frozenset({
+    "suite", "ste", "apt", "apartment", "unit", "st", "street", "ave", "avenue",
+    "rd", "road", "dr", "drive", "ln", "lane", "blvd", "boulevard", "way", "ct",
+    "court", "pl", "place", "floor", "fl", "n", "s", "e", "w", "north", "south",
+    "east", "west", "usa", "us",
+})
 
 
 @dataclass(frozen=True)
@@ -211,6 +219,25 @@ def _parse_dt(value: Any) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "")).replace(tzinfo=None)
     except ValueError:
         return None
+
+
+def _addr_key(addr: Any) -> tuple[str, ...] | None:
+    """Normalised comparison key of an address (dict, model or tool args)."""
+    if addr is None:
+        return None
+    vals = []
+    for f in ADDRESS_FIELDS:
+        v = _attr(addr, f)
+        vals.append(" ".join(str(v).strip().lower().split()) if v is not None else "")
+    return tuple(vals) if any(vals) else None
+
+
+def _addr_tokens(args: dict) -> set[str]:
+    """Distinctive tokens of an address (zip, house/suite numbers, street name)."""
+    out = _tokens(str(args.get("zip") or ""))
+    for f in ("address1", "address2"):
+        out |= _tokens(str(args.get(f) or ""))
+    return out - _ADDR_STOPWORDS - {""}
 
 
 def _lookup(mapping: Any, key: Any) -> Any:
@@ -316,10 +343,15 @@ class SafeGuardEnforcer(Enforcer):
     def pre_tool_call(self, tool_call, task, history, turn):
         st = self.state
         name = tool_call.name
-        if name == TRANSFER_TOOL or st.db is None:
+        if name == TRANSFER_TOOL:
             return Decision(action="allow", enforcer=self.name), []
         if name not in WRITE_TOOLS.get(st.domain, ()):
             return Decision(action="allow", enforcer=self.name), []
+        if st.db is None:
+            return self._block(name, [Violation(
+                "S", "state_unavailable",
+                "Live state is unavailable; this write cannot be verified.",
+            )], turn)
 
         if self.dims["E"] and st.blocks_since_user_turn[name] >= CIRCUIT_BREAKER_LIMIT:
             v = [Violation(
@@ -338,6 +370,11 @@ class SafeGuardEnforcer(Enforcer):
             )
             for err in errors
         ]
+        if errors:
+            violations.append(Violation(
+                "S", "rule_error",
+                "A policy check failed internally; do not execute an unverified write.",
+            ))
         if violations:
             decision, block_events = self._block(name, violations, turn)
             return decision, events + block_events
@@ -350,7 +387,7 @@ class SafeGuardEnforcer(Enforcer):
     # --------------------------------------------------------------- checking
 
     def evaluate_write(self, name: str, args: dict) -> tuple[list[Violation], list[str]]:
-        """Run every enabled rule for a WRITE call. Rule crashes fail open."""
+        """Collect enabled rule failures; the dispatch hook fails closed on errors."""
         checks = []
         if self.dims["F"]:
             checks.append(self._check_flow)
@@ -368,7 +405,7 @@ class SafeGuardEnforcer(Enforcer):
         for check in checks:
             try:
                 violations.extend(check(name, args))
-            except Exception as exc:  # noqa: BLE001 - fail open, but record
+            except Exception as exc:  # noqa: BLE001 - recorded and blocked by dispatch
                 errors.append(f"{check.__name__}: {type(exc).__name__}: {exc}")
         return violations, errors
 
@@ -501,7 +538,14 @@ class SafeGuardEnforcer(Enforcer):
                     "get_user_details first.",
                 ))
 
-        # 3. Explicit confirmation of the listed action details.
+        out.extend(self._check_confirmation(name, args))
+        return out
+
+    def _check_confirmation(self, name: str, args: dict) -> list[Violation]:
+        st = self.state
+        target = self._target(name, args)
+        out: list[Violation] = []
+        # Explicit confirmation of the listed action details.
         if not st.confirmed:
             out.append(Violation(
                 "F", "confirm",
@@ -513,6 +557,9 @@ class SafeGuardEnforcer(Enforcer):
             keys = set(self._confirm_keys(name, args))
             for _, value in _iter_anchor_values(args):
                 keys |= _tokens(_norm(value))
+            if name in ("modify_user_address", "modify_pending_order_address"):
+                # Address writes bind to the listing through the address itself.
+                keys |= _addr_tokens(args)
             keys.discard("")
             if keys and not keys & st.listing_tokens:
                 out.append(Violation(
@@ -973,6 +1020,14 @@ class SafeGuardEnforcer(Enforcer):
                     "S", "not_owner",
                     "Only the authenticated user's own address can be changed.",
                 ))
+            new = _addr_key(args)
+            cur = _addr_key(_attr(self._get_user(args.get("user_id")), "address"))
+            if new is not None and new == cur:
+                out.append(Violation(
+                    "S", "noop_address",
+                    "The new address is identical to the current one; nothing would "
+                    "change. Re-check which address the user wants.",
+                ))
             return out
 
         order = self._get("orders", args.get("order_id"))
@@ -1006,6 +1061,14 @@ class SafeGuardEnforcer(Enforcer):
         elif name == "modify_pending_order_address":
             if "pending" not in status:
                 out.append(status_violation("pending"))
+            new = _addr_key(args)
+            cur = _addr_key(_attr(order, "address"))
+            if new is not None and new == cur:
+                out.append(Violation(
+                    "S", "noop_address",
+                    "The new address is identical to the order's current address; "
+                    "nothing would change. Re-check which order and address are meant.",
+                ))
         elif name == "modify_pending_order_payment":
             if "pending" not in status:
                 out.append(status_violation("pending"))

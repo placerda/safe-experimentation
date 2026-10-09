@@ -69,3 +69,33 @@ pytest                                          # all tests
 pytest tests/test_safe_evaluators.py            # single file
 pytest tests/test_safe_evaluators.py::test_scope  # single test
 ```
+
+## Transactional SAFE-Guard
+
+The `safeguard-transaction` variant replaces loose confirmation-token matching
+with trusted **prepare -> present -> confirm -> commit** authorization. The
+runner, not the agent, presents the exact proposed tools, arguments and live
+address/item details. Approval is ordered, single-use and invalidated by user
+revisions or relevant state changes. Policy check failures block writes.
+It does not use task annotations, expected actions or hidden simulator goals.
+
+See [method and evaluation protocol](docs/transactional-authorization.md) for
+conditional guarantees, limitations and the retained v6 retail regression.
+
+```powershell
+python scripts\run_experiment.py --config configs\experiment.transaction.yaml `
+  --tasks-dir data\heldout2\selected_tasks --annotations-dir data\heldout2\annotations `
+  --seeds 0,1,2 --workers 4
+```
+
+Offline diagnostics replay every originally executed call, even when a
+candidate guard would block it, and require exact recorded tool outputs:
+
+```powershell
+python scripts\shadow_replay.py outputs\runs\20261008_180726__v6-heldout `
+  --tasks-dir data\heldout\selected_tasks --out outputs\runs\v7-shadow
+```
+
+Replay cannot estimate live-agent success or safety after changed feedback.
+Previously inspected held-out tasks are calibration data for subsequent
+versions, not untouched confirmatory evidence.

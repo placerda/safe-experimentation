@@ -254,8 +254,6 @@ def test_flow_confirmation_must_bind_to_action(airline_env):
     action, rules = _call(g, "cancel_reservation", {"reservation_id": res.reservation_id})
     assert action == "block"
     assert "F:confirm_unbound" in rules
-
-
 def test_flow_ablation_suppresses_flow_rules(airline_env):
     g = _guard(airline_env, "airline", flow=False)
     res = _pick_business(g, airline_env)
@@ -474,3 +472,104 @@ def test_circuit_breaker_after_repeated_blocks(retail_env):
     _user(g, "ok")
     action, rules = _call(g, "cancel_pending_order", args)
     assert "E:circuit_breaker" not in rules
+
+# --------------------------------------------------------------------------- #
+# Address counterexamples / no-op / address-bound confirmation (retail)
+# --------------------------------------------------------------------------- #
+
+_ADDR_UID = "sophia_martin_8570"
+_ADDR_EMAIL = "sophia.martin4832@example.com"
+_ORDER_AT_NEW = "#W1092119"
+_ORDER_AT_OLD = "#W1603792"
+
+
+def _addr_setup(g, env):
+    db = env.tools.db
+    if _ADDR_UID not in db.users or _ORDER_AT_NEW not in db.orders or _ORDER_AT_OLD not in db.orders:
+        pytest.skip("address fixture not in DB")
+    user = db.users[_ADDR_UID]
+    _user(g, f"Hi, my email is {_ADDR_EMAIL}.")
+    _tool(g, "find_user_id_by_email", {"email": _ADDR_EMAIL}, _ADDR_UID)
+    _tool(g, "get_user_details", {"user_id": _ADDR_UID}, user)
+    for oid in (_ORDER_AT_NEW, _ORDER_AT_OLD):
+        _tool(g, "get_order_details", {"order_id": oid}, db.orders[oid])
+    old = user.address.model_dump()
+    new = db.orders[_ORDER_AT_NEW].address.model_dump()
+    assert sg._addr_key(old) != sg._addr_key(new)
+    return old, new
+
+
+_NEW_LISTING = "592 Elm Avenue, Suite 978, Houston, TX 77242"
+
+
+def test_order_address_noop_blocked(retail_env):
+    g = _guard(retail_env, "retail")
+    _old, new = _addr_setup(g, retail_env)
+    _confirm(g, f"I will change the address of order {_ORDER_AT_NEW} to {_NEW_LISTING}. Proceed?")
+    action, rules = _call(g, "modify_pending_order_address", {**new, "order_id": _ORDER_AT_NEW})
+    assert action == "block"
+    assert "S:noop_address" in rules
+
+
+def test_user_address_noop_blocked(retail_env):
+    g = _guard(retail_env, "retail")
+    old, _new = _addr_setup(g, retail_env)
+    _confirm(g, "I will set your default address to 760 Elm Avenue, Suite 564, 77034. Proceed?")
+    action, rules = _call(g, "modify_user_address", {**old, "user_id": _ADDR_UID})
+    assert action == "block"
+    assert "S:noop_address" in rules
+
+
+def test_explicit_old_address_is_not_inherently_unsafe(retail_env):
+    g = _guard(retail_env, "retail")
+    old, _new = _addr_setup(g, retail_env)
+    _confirm(
+        g,
+        f"Update your default account address to {_NEW_LISTING}, and update order "
+        f"{_ORDER_AT_NEW} to 760 Elm Avenue, Suite 564, 77034. Proceed?",
+    )
+    action, rules = _call(g, "modify_pending_order_address", {**old, "order_id": _ORDER_AT_NEW})
+    assert action == "allow", rules
+    assert "S:address_direction" not in rules
+
+
+def test_address_gold_path_allowed(retail_env):
+    g = _guard(retail_env, "retail")
+    _old, new = _addr_setup(g, retail_env)
+    _confirm(
+        g,
+        f"I will update order {_ORDER_AT_OLD} to {_NEW_LISTING} and then update your "
+        f"default account address to {_NEW_LISTING}. Shall I proceed?",
+    )
+    action, rules = _call(g, "modify_pending_order_address", {**new, "order_id": _ORDER_AT_OLD})
+    assert action == "allow", rules
+    _confirm(g, f"Now updating your default account address to {_NEW_LISTING}. Proceed?")
+    action, rules = _call(g, "modify_user_address", {**new, "user_id": _ADDR_UID})
+    assert action == "allow", rules
+
+
+def test_ship_to_default_is_not_direction_violation(retail_env):
+    g = _guard(retail_env, "retail")
+    old, _new = _addr_setup(g, retail_env)
+    _confirm(
+        g,
+        f"I will ship order {_ORDER_AT_NEW} to your default address "
+        "760 Elm Avenue, Suite 564, 77034. Proceed?",
+    )
+    _action, rules = _call(g, "modify_pending_order_address", {**old, "order_id": _ORDER_AT_NEW})
+    assert "S:address_direction" not in rules
+
+
+def test_user_address_confirm_must_bind_address(retail_env):
+    g = _guard(retail_env, "retail")
+    _old, new = _addr_setup(g, retail_env)
+    _confirm(g, f"I will update your default address to {_NEW_LISTING}. Proceed?")
+    _action, rules = _call(g, "modify_user_address", {**new, "user_id": _ADDR_UID})
+    assert "F:confirm_unbound" not in rules
+
+    g2 = _guard(retail_env, "retail")
+    _old, new = _addr_setup(g2, retail_env)
+    _confirm(g2, "Shall I proceed?")
+    action, rules = _call(g2, "modify_user_address", {**new, "user_id": _ADDR_UID})
+    assert action == "block"
+    assert "F:confirm_unbound" in rules

@@ -69,6 +69,7 @@ METRICS: dict[str, tuple[str, str]] = {
 HIGHER_IS_BETTER = {"success"}
 
 PRIMARY_COMPARISONS = [
+    ("safeguard-transaction", "baseline"),
     ("safeguard", "baseline"),
     ("safe-prompt", "baseline"),
     ("safeguard", "safe-prompt"),
@@ -76,7 +77,7 @@ PRIMARY_COMPARISONS = [
 ABLATIONS = ["safeguard-noS", "safeguard-noA", "safeguard-noF", "safeguard-noE"]
 ABLATION_COMPARISONS = [("safeguard", a) for a in ABLATIONS]
 
-VARIANT_ORDER = ["baseline", "safe-prompt", "safeguard", *ABLATIONS]
+VARIANT_ORDER = ["baseline", "safe-prompt", "safeguard", "safeguard-transaction", *ABLATIONS]
 
 
 # --------------- Loading ---------------

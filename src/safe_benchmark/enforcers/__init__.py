@@ -134,4 +134,7 @@ def build_stack(names: list[str]) -> list[Enforcer]:
     for n in names:
         if n in safeguard_variants:
             stack.append(SafeGuardEnforcer(**safeguard_variants[n]))
+    if "safeguard-transaction" in names:
+        from safe_benchmark.enforcers.transaction import TransactionGuardEnforcer
+        stack.append(TransactionGuardEnforcer())
     return stack

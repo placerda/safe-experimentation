@@ -639,6 +639,16 @@ def run_task(
 
         # Agent produced a text response (no tool calls) — this goes to the user
         agent_text = assistant_msg.content or ""
+        for enforcer in stack:
+            render = getattr(enforcer, "render_assistant", None)
+            if callable(render):
+                try:
+                    agent_text = render(agent_text)
+                except Exception as exc:  # noqa: BLE001 - explicit trusted-path failure
+                    trace.error = f"Guardrail manifest rendering failed: {exc}"
+                    break
+        if trace.error:
+            break
         agent_messages.append({"role": "assistant", "content": agent_text})
         user_conversation.append({"role": "assistant", "content": agent_text})
         trace.messages.append(Message(role="assistant", content=agent_text))
