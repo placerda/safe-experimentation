@@ -23,3 +23,19 @@ only, seed index 0, two workers, existing gpt-5.4-1 deployment and unchanged
 execution and integrity verification. Preserve original rewards and mismatches,
 including valid failures. This is another versioned development check, not
 replacement of earlier valid trajectories or independent confirmation.
+
+## Retained `aa0f46f` selected outcome
+
+74 hashes and two exact trace/result cells verified; no execution errors.
+Both full rewards are zero. retail_104 has zero non-gold writes and zero
+missing gold writes; address precedes item change and the 2-piece configuration
+is preserved. Its full reward still fails and is not rescued from write counts.
+The agent selected the correct variant itself, so the live trace does not
+establish a causal effect of the color predicate.
+
+retail_111 has zero executed writes and three missing gold writes. Its explicit
+reply authorizing all listed actions with exact values/order was rejected by
+the overly narrow controlled affirmative grammar; a later "yes" still resulted
+in re-preparation and eventual human transfer. The next source extends only
+this controlled exact-manifest assent syntax. It still requires a displayed,
+unchanged manifest digest; partial approvals and added corrections fail closed.

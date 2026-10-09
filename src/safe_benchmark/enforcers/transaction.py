@@ -26,6 +26,18 @@ _CONFIRM = re.compile(
     r"(?:[,\s]+(?:please|proceed|go ahead|do it|thank you|thanks))*[.!]?\s*",
     re.IGNORECASE,
 )
+_EXACT_MANIFEST_CONFIRM = re.compile(
+    r"(?:yes (?:that|it) all looks right )?(?:yes )?i "
+    r"(?:authorize|approve|confirm) all (?:of )?(?:the|these|those|listed) actions "
+    r"with (?:the|these|those) exact values in (?:the|that|this) order",
+    re.IGNORECASE,
+)
+
+
+def _confirms_manifest(text: str) -> bool:
+    normalized = re.sub(r"[.,!\u2026]+", " ", text)
+    normalized = " ".join(normalized.split())
+    return bool(_CONFIRM.fullmatch(text) or _EXACT_MANIFEST_CONFIRM.fullmatch(normalized))
 
 
 def _json(value: Any) -> str:
@@ -226,7 +238,7 @@ class TransactionGuardEnforcer(SafeGuardEnforcer):
         digest = hashlib.sha256(
             _json([action.model_dump() for action in auth.pending]).encode()
         ).hexdigest()
-        if auth.pending and auth.presented_digest == digest and _CONFIRM.fullmatch(user_msg or ""):
+        if auth.pending and auth.presented_digest == digest and _confirms_manifest(text):
             auth.approved = [action.model_copy(deep=True) for action in auth.pending]
         auth.pending = []
         auth.presented_digest = None
