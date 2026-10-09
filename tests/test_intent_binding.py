@@ -181,3 +181,53 @@ def test_same_order_relation_accepts_target_containing_both():
         g, "return_delivered_order_items", {"order_id": "#W2", "item_ids": ["item_b"]},
         "The camera and the bicycle. They are from the same order.",
     )
+
+
+def test_cheapest_same_order_does_not_expand_to_catalog():
+    g, _, _ = setup()
+    order = g._get("orders", "#W2")
+    order["items"].extend([
+        dict(item_id="best", product_id="product_b", name="Action Camera", price=100),
+        dict(item_id="expensive", product_id="product_b", name="Action Camera", price=120),
+    ])
+    args = dict(order_id="#W2", item_ids=["item_b"], new_item_ids=["best"])
+    text = "Replace my camera with the cheapest camera from the rest of that same order."
+    assert not rules(g, "modify_pending_order_items", args, text)
+    args["new_item_ids"] = ["low"]
+    assert "intent_candidate_set" in rules(g, "modify_pending_order_items", args, text)
+    args["new_item_ids"] = ["expensive"]
+    assert "intent_cheapest" in rules(g, "modify_pending_order_items", args, text)
+
+
+def test_same_order_candidate_set_is_product_specific():
+    g, _, _ = setup()
+    args = dict(order_id="#W2", item_ids=["item_b"], new_item_ids=["low"])
+    assert "intent_candidate_set" in rules(
+        g, "modify_pending_order_items", args,
+        "I want the cheapest camera among the other items in this order.",
+    )
+
+
+def test_catalog_cheapest_keeps_existing_behavior_with_other_order_items():
+    g, _, _ = setup()
+    g._get("orders", "#W2")["items"].append(
+        dict(item_id="best", product_id="product_b", name="Action Camera", price=100),
+    )
+    args = dict(order_id="#W2", item_ids=["item_b"], new_item_ids=["best"])
+    assert "intent_cheapest" in rules(
+        g, "modify_pending_order_items", args,
+        "Replace my camera with the cheapest camera available.",
+    )
+
+
+def test_unavailable_peer_requires_clarification_not_catalog_substitution():
+    g, _, _ = setup()
+    g._get("orders", "#W2")["items"].append(
+        dict(item_id="best", product_id="product_b", name="Action Camera", price=100),
+    )
+    g._get("products", "product_b")["variants"]["best"]["available"] = False
+    args = dict(order_id="#W2", item_ids=["item_b"], new_item_ids=["low"])
+    assert "intent_candidate_set" in rules(
+        g, "modify_pending_order_items", args,
+        "Replace the camera with the cheapest camera from that order.",
+    )

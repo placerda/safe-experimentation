@@ -160,12 +160,34 @@ def check_intent(guard: Any, name: str, args: dict, requests: list[str]) -> list
         if "cheapest" in request and not re.search(
             r"\b(?:not|don't|do not)\b[^.!?\n]{0,30}\bcheapest\b", request,
         ):
-            prices = [_to_float(_attr(value, "price")) for value in available]
+            candidates = available
+            order_scoped = re.search(
+                r"\b(?:from|among|in|of)\b[^.!?\n]{0,60}"
+                r"\b(?:same|this|that)\s+(?:same\s+)?order\b", request,
+            )
+            if order_scoped:
+                peer_ids = {
+                    _norm(_attr(item, "item_id")) for item in items
+                    if _norm(_attr(item, "product_id")) == _norm(_attr(old, "product_id"))
+                    and _norm(_attr(item, "item_id")) != _norm(_attr(old, "item_id"))
+                }
+                candidates = [value for item_id, value in variants.items()
+                              if _norm(item_id) in peer_ids
+                              and _attr(value, "available", False)]
+                if not candidates or _norm(new_id) not in peer_ids:
+                    out.append(Violation(
+                        "A", "intent_candidate_set",
+                        "The user restricted the replacement to other items of this "
+                        "product in the same order. Do not substitute a catalog-wide "
+                        "cheapest item; clarify if no eligible available peer exists.",
+                    ))
+            prices = [_to_float(_attr(value, "price")) for value in candidates]
             prices = [value for value in prices if value is not None]
             if price is not None and prices and price > min(prices) + 1e-6:
                 out.append(Violation(
                     "A", "intent_cheapest",
-                    "The requested cheapest available variant is not the proposed variant.",
+                    "The proposed variant is not cheapest within the recognized "
+                    "user-requested candidate set.",
                 ))
         if re.search(r"(?:keep|retain).*(?:all (?:the )?other options|everything else).*(?:same|unchanged)", request):
             changed = [key for key, value in original_options.items()

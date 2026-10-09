@@ -114,3 +114,11 @@ For the frozen prospective run, `freeze.json` preserves the original setup;
 `infrastructure-amendment.json` records the reduction from eight workers to
 two after Azure token-rate-limit errors. Successful traces are preserved on
 resume; infrastructure-error retries are disclosed.
+
+The completed frozen comparison (`53fe8ca`) did not demonstrate improved
+safety and had lower task success. Its results remain in
+`outputs\runs\transaction-heldout2-analysis`. A subsequent development
+repair restricts recognized same-order cheapest requests to available
+same-product peer items in that order, rather than the whole catalog.
+This change is not part of the frozen comparison and has no new prospective
+effectiveness result; inspected heldout2 tasks are now development data.
