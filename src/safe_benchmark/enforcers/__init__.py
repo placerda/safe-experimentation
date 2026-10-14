@@ -137,4 +137,7 @@ def build_stack(names: list[str]) -> list[Enforcer]:
     if "safeguard-transaction" in names:
         from safe_benchmark.enforcers.transaction import TransactionGuardEnforcer
         stack.append(TransactionGuardEnforcer())
+    if "manifest-only" in names:
+        from safe_benchmark.enforcers.transaction import ManifestOnlyEnforcer
+        stack.append(ManifestOnlyEnforcer())
     return stack

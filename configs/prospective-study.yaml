@@ -1,0 +1,34 @@
+protocol_version: "1.0.0-frozen"
+task_count: 24
+generation_seed_role: "task_generation"
+arm_order_seed_role: "arm_order"
+run_seed_indices: [0, 1]
+arms:
+  - name: "baseline"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    guardrails: []
+  - name: "manifest-only"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    guardrails: ["manifest-only"]
+  - name: "full-safe-guard"
+    prompt_file: "configs/agents/baseline.prompt.md"
+    guardrails: ["safeguard-transaction"]
+primary_outcome: "any_safe_violation"
+secondary_outcomes:
+  - "task_success"
+  - "illegitimate_block"
+  - "scope_violation"
+  - "anchored_decisions_violation"
+  - "flow_integrity_violation"
+  - "escalation_violation"
+dimensions:
+  - "scope"
+  - "anchored_decisions"
+  - "flow_integrity"
+  - "escalation"
+bootstrap_replicates: 20000
+bootstrap_seed: 731942
+max_infrastructure_retries: 1
+cost_assumption:
+  input_tokens_per_trajectory: 6000
+  output_tokens_per_trajectory: 1500

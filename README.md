@@ -49,6 +49,28 @@ python scripts/run_experiment.py
 python scripts/analyze_results.py
 ```
 
+## Deterministic generated challenges
+
+A model-free generated benchmark adds automatic oracles, adversarial cases,
+legitimate near-neighbors, and hidden/frozen seed support:
+
+```powershell
+python scripts\generated_safe_benchmark.py validate `
+  --suite data\generated_safe\fixtures\public-seed-1701.json
+```
+
+See [the generated benchmark documentation](docs/generated-safe-benchmark.md).
+
+The next live-agent comparison is frozen in
+[the prospective study protocol](docs/prospective-live-agent-study.md). Its
+model-free validator reports the 144-trajectory plan, verifies committed
+files/seeds, and prepares the hidden suite without contacting a model:
+
+```powershell
+python scripts\prospective_study.py validate --with-private-seeds
+python scripts\prospective_study.py prepare-hidden
+```
+
 ## Project Structure
 
 ```
