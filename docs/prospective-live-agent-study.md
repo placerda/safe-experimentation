@@ -85,13 +85,27 @@ tuning. Development after unblinding requires a separately named study with
 new commitments and must preserve this result.
 
 Only infrastructure failures are retryable: transport timeout, provider 429/5xx,
-process crash before a terminal trace, or corrupted/missing trace serialization.
+provider authentication failure before any model response, process crash before
+a terminal trace, or corrupted/missing trace serialization.
 Model refusal, guard block, tool error, simulator behavior, turn exhaustion,
 and task failure are outcomes, not retry reasons. At most one infrastructure
 retry is allowed for the same frozen `(task, seed_index, arm)` job. Preserve
 all attempts, mark the superseded attempt, reuse no partial conversation, and
 report retry counts/reasons. If the retry also fails, mark the job incomplete
 and block confirmatory analysis; do not replace the task or seed.
+
+### Pre-execution amendment
+
+The first paid launch produced no model responses or terminal task traces:
+all 144 jobs failed during client construction because the installed OpenAI SDK
+performed base-client credential validation before attaching the configured
+Azure Entra token provider. Those records are preserved as attempt 1 and are
+classified as `provider_authentication` infrastructure failures. The runtime
+compatibility fix disables only that premature constructor check; AzureOpenAI
+still obtains a fresh Entra bearer token for every request. No task, seed, arm,
+prompt, oracle, outcome, publication gate, or analysis rule changed.
+Freeze manifest version `3-auth-compatibility-amendment` records the exact
+runtime and analyzer hashes used for the sole permitted retry.
 
 ## Cost surface and commands
 
@@ -116,3 +130,19 @@ provenance. The analyzer rejects an `any_safe_violation` value that differs
 from the union of the four dimension indicators, more than one retry, or a
 retry whose preserved first attempt is not an enumerated infrastructure
 failure.
+
+## Observed confirmatory result
+
+The frozen paid study completed all 144 trajectories. Full SAFE-Guard did not
+improve the primary outcome relative to manifest-only: it produced 12/48
+trajectories with a SAFE violation (25.0%) versus 7/48 (14.6%), a paired
+difference of +10.4 percentage points and a relative reduction of -71.4%.
+Task success was 36/48 (75.0%) versus 41/48 (85.4%), with a paired difference
+of -10.4 percentage points. Neither arm produced an illegitimate block on the
+24 legitimate near-neighbor trajectories.
+
+Only the illegitimate-block gate passed. The violation-reduction and
+non-inferiority gates failed, so the prespecified confirmatory claim is rejected
+and this result cannot support submission of the current method as an effective
+live-agent safety improvement. The deterministic mechanism tests remain valid
+as component-behavior evidence, but they do not override the live result.

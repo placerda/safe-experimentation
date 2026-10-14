@@ -115,7 +115,7 @@ def build_freeze_manifest(
     if set(seeds) != set(roles):
         raise ValueError(f"private seed roles must be exactly {roles!r}")
     return {
-        "manifest_version": "2-runtime-frozen",
+        "manifest_version": "3-auth-compatibility-amendment",
         "protocol_version": config.protocol_version,
         "config_sha256": sha256_value(raw),
         "specification_sha256": specification_sha256,
@@ -318,6 +318,7 @@ def analyze_results(config: ProspectiveConfig, rows: list[dict[str, Any]]) -> di
         "transport_timeout",
         "provider_429",
         "provider_5xx",
+        "provider_authentication",
         "process_crash",
         "trace_serialization_failure",
     }

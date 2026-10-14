@@ -43,6 +43,7 @@ INFRASTRUCTURE_REASONS = frozenset(
         "transport_timeout",
         "provider_429",
         "provider_5xx",
+        "provider_authentication",
         "process_crash",
         "trace_serialization_failure",
     }
@@ -507,10 +508,15 @@ def create_azure_agent(system_prompt: str) -> AzureModelAgent:
         provider = get_bearer_token_provider(
             DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
         )
+        # This OpenAI SDK build validates base-client credentials before the
+        # Azure token provider is attached. Disable only that incompatible
+        # constructor check; AzureOpenAI still obtains and validates a fresh
+        # bearer token through azure_ad_token_provider for every request.
         client = AzureOpenAI(
             azure_endpoint=endpoint,
             azure_ad_token_provider=provider,
             api_version=api_version,
+            _enforce_credentials=False,
         )
     return AzureModelAgent(system_prompt, deployment, client)
 
